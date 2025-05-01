@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: pyszne-bot
+    env: node
+    plan: free
+    buildCommand: "yarn"
+    startCommand: "yarn start"
+    branch: main
+    region: frankfurt

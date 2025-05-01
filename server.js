@@ -1,13 +1,11 @@
-{
-  "name": "pyszne-bot",
-  "version": "1.0.0",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "express": "^4.18.2",
-    "node-telegram-bot-api": "^0.61.0"
-  }
-}
+import express from 'express';
+const app = express();
+const port = process.env.PORT || 3000;
 
+app.get('/', (req, res) => {
+  res.send('Bot działa!');
+});
+
+app.listen(port, () => {
+  console.log(`Serwer działa na porcie ${port}`);
+});

@@ -9,42 +9,65 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
-const knowledgeBase = [
-  {
-    keywords: ['wypłata', 'wypłaty', 'pieniądze', 'pensja'],
-    answer: 'Wypłaty są dwa razy w miesiącu: do 10-go i do 25-go. Sprawdź w aplikacji Scoober dokładną datę.'
-  },
-  {
-    keywords: ['ubezpieczenie', 'medicover', 'sport', 'zdrowie'],
-    answer: 'Medicover Sport dostępny jest dla kurierów zatrudnionych przez Trenkwalder lub Takeaway. Kurierzy Application Partner nie mają tego benefitu.'
-  },
-  {
-    keywords: ['grafik', 'zmiany', 'dyspozycyjność'],
-    answer: 'Grafik edytujesz w Scoober w sekcji „Shift Planning”. Zgłaszaj dostępność do wtorku, 23:59.'
-  },
-  {
-    keywords: ['koordynator', 'kontakt', 'telefon'],
-    answer: 'Kontakt do koordynatora znajdziesz w aplikacji Scoober. Wybierz „Połącz z koordynatorem”.'
-  },
-  {
-    keywords: ['scoober'],
-    answer: 'Scoober to system do pracy kuriera Pyszne – przez niego odbierasz zlecenia, kontaktujesz się z bazą i edytujesz grafik.'
+const knownZones = {
+  "centrum": "Centrum",
+  "ursus": "Ursus",
+  "bemowo": "Bemowo/Bielany",
+  "bielany": "Bemowo/Bielany",
+  "białołęka": "Białołęka/Tarchomin",
+  "tarchomin": "Białołęka/Tarchomin",
+  "praga": "Praga",
+  "rembertów": "Rembertów",
+  "wawer": "Wawer",
+  "służew": "Służew",
+  "ursynów": "Ursynów",
+  "wilanów": "Wilanów",
+  "marki": "Marki",
+  "legionowo": "Legionowo",
+  "łomianki": "Łomianki"
+};
+
+let shifts = [];
+
+function parseZone(text) {
+  const lower = text.toLowerCase();
+  for (const [key, val] of Object.entries(knownZones)) {
+    if (lower.includes(key)) return val;
   }
-];
+  return null;
+}
 
-bot.on('message', (msg) => {
-  const text = msg.text?.toLowerCase();
-  const chatId = msg.chat.id;
+bot.onText(/oddaj[eę]? zmian[ęe]? (.+), (.+), (.+)/i, (msg, match) => {
+  const date = match[1];
+  const hours = match[2];
+  const zoneRaw = match[3];
+  const user = `${msg.from.first_name} ${msg.from.last_name || ''}`.trim();
+  const userId = msg.from.id;
 
-  if (!text || text.startsWith('/')) return;
-
-  const match = knowledgeBase.find(entry =>
-    entry.keywords.some(keyword => text.includes(keyword))
-  );
-
-  if (match) {
-    bot.sendMessage(chatId, match.answer);
-  } else {
-    bot.sendMessage(chatId, 'Nie jestem pewny, ale możesz to sprawdzić w Scoober lub zapytać koordynatora.');
+  const zone = parseZone(zoneRaw);
+  if (!zone) {
+    bot.sendMessage(msg.chat.id, `Nie rozpoznano strefy "${zoneRaw}". Podaj dokładną nazwę lub popraw literówki.`);
+    return;
   }
+
+  shifts.push({ date, hours, zone, user, userId });
+  bot.sendMessage(msg.chat.id, `Zapisano: ${user}, ${date} ${hours}, ${zone}`);
+});
+
+bot.onText(/zobacz zmiany (.+)/i, (msg, match) => {
+  const zoneRaw = match[1];
+  const zone = parseZone(zoneRaw);
+  if (!zone) {
+    bot.sendMessage(msg.chat.id, `Nie rozpoznano strefy "${zoneRaw}".`);
+    return;
+  }
+
+  const zoneShifts = shifts.filter(s => s.zone === zone);
+  if (zoneShifts.length === 0) {
+    bot.sendMessage(msg.chat.id, `Brak dostępnych zmian w strefie ${zone}.`);
+    return;
+  }
+
+  const list = zoneShifts.map(s => `${s.user}: ${s.date} ${s.hours}`).join('\n');
+  bot.sendMessage(msg.chat.id, `Dostępne zmiany w strefie ${zone}:\n${list}`);
 });

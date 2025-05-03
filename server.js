@@ -139,11 +139,10 @@ bot.on('message', msg => {
       bot.sendMessage(chatId, `Dostępne zmiany w strefie ${strefa}:\n${list}`);
     
     });
+
     
   }
   
-});
-
-app.get('/', (req, res) => res.send('Bot działa.'));
+}); app.get('/', (req, res) => res.send('Bot działa.'));
 app.listen(PORT, () => console.log(`Serwer działa na porcie ${PORT}`));
 

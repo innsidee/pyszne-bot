@@ -1,106 +1,125 @@
-import express from 'express';
-import TelegramBot from 'node-telegram-bot-api';
-import 'dotenv/config';
-import sqlite3 from 'sqlite3';
-import fetch from 'node-fetch';
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('Bot is alive'));
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-// === ANTYSEN (PING) ===
-setInterval(() => {
-  fetch('https://pyszne-bot.onrender.com/').catch(() => {});
-}, 14 * 60 * 1000); // co 14 minut
+const TelegramBot = require('node-telegram-bot-api');
+const sqlite3 = require('sqlite3').verbose();
+const dotenv = require('dotenv');
+dotenv.config();
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+const db = new sqlite3.Database('shifts.db');
 
-// === BAZA ===
-const db = new sqlite3.Database('./shifts.db');
-db.run(`CREATE TABLE IF NOT EXISTS shifts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user TEXT,
-  userId INTEGER,
-  date TEXT,
-  hours TEXT,
-  zone TEXT,
-  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-)`);
-
-const knownZones = {
-  "centrum": "Centrum",
-  "ursus": "Ursus",
-  "bemowo": "Bemowo/Bielany",
-  "bielany": "Bemowo/Bielany",
-  "białołęka": "Białołęka/Tarchomin",
-  "tarchomin": "Białołęka/Tarchomin",
-  "praga": "Praga",
-  "rembertów": "Rembertów",
-  "wawer": "Wawer",
-  "służew": "Służew",
-  "ursynów": "Ursynów",
-  "wilanów": "Wilanów",
-  "marki": "Marki",
-  "legionowo": "Legionowo",
-  "łomianki": "Łomianki"
+// Strefy i ich warianty pisowni
+const STREFY = {
+  centrum: ['centrum', 'сentrum', 'center'],
+  ursus: ['ursus'],
+  'bemowo/bielany': ['bemowo', 'bielany', 'bemowo/bielany'],
+  'białołęka/tarchomin': ['bialoleka', 'białołęka', 'tarchomin', 'bialoleka/tarchomin'],
+  praga: ['praga', 'prage'],
+  rembertów: ['rembertów', 'rember'],
+  wawer: ['wawer'],
+  służew: ['służew', 'sluzew'],
+  ursynów: ['ursynów', 'ursynow'],
+  wilanów: ['wilanów', 'wilanow'],
+  marki: ['marki'],
+  legionowo: ['legionowo', 'legionow'],
+  łomianki: ['łomianki', 'lomianki']
 };
 
-function parseZone(text) {
-  const lower = text.toLowerCase();
-  for (const [key, val] of Object.entries(knownZones)) {
-    if (lower.includes(key)) return val;
+function normalizujStrefe(tekst) {
+  const lower = tekst.toLowerCase();
+  for (const [strefa, warianty] of Object.entries(STREFY)) {
+    if (warianty.some(w => lower.includes(w))) return strefa;
   }
   return null;
 }
 
-// === ZAPISYWANIE ZMIANY ===
-bot.onText(/oddaj[eę]? zmian[ęe]? (.+)/i, (msg, match) => {
-  const text = match[1];
-  const chatId = msg.chat.id;
-  const user = `${msg.from.first_name} ${msg.from.last_name || ''}`.trim();
-  const userId = msg.from.id;
-
-  const regex = /(\d{1,2}\.\d{1,2})[, ]+(\d{1,2}:\d{2})[-–](\d{1,2}:\d{2})[, ]+(.+)/;
-  const found = text.match(regex);
-  if (!found) {
-    bot.sendMessage(chatId, `Nie rozumiem formatu. Podaj: oddaję zmianę 12.05, 15:00–19:00, strefa`);
-    return;
+function extractDate(text) {
+  const patterns = [
+    /\b(\d{1,2}[./\- ]\d{1,2})\b/i,
+    /\bdn\s*(\d{1,2}[./\- ]\d{1,2})\b/i,
+    /\b(dziś|dzisiaj)\b/i,
+    /\bjutro\b/i,
+    /\b(?:pn|wt|śr|czw|pt|sb|nd|sobota|niedziela|poniedziałek)\b/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1] || match[0];
   }
+  return null;
+}
 
-  const [_, date, start, end, zoneRaw] = found;
-  const zone = parseZone(zoneRaw);
-  if (!zone) {
-    bot.sendMessage(chatId, `Nie rozpoznano strefy "${zoneRaw}".`);
-    return;
+function extractTime(text) {
+  const pattern = /(\d{1,2}[:.\s]?\d{0,2})\s*(?:-|do|–|—|–>)\s*(\d{1,2}[:.\s]?\d{0,2})/i;
+  const match = text.match(pattern);
+  if (match) {
+    const from = match[1].replace(/[^\d]/g, ':').replace(/^(\d{1,2})$/, '$1:00');
+    const to = match[2].replace(/[^\d]/g, ':').replace(/^(\d{1,2})$/, '$1:00');
+    return `${from}–${to}`;
   }
+  return null;
+}
 
-  const hours = `${start}–${end}`;
-  db.run(
-    `INSERT INTO shifts (user, userId, date, hours, zone) VALUES (?, ?, ?, ?, ?)`,
-    [user, userId, date, hours, zone],
-    function () {
-      bot.sendMessage(chatId, `Zapisano: ${user}, ${date} ${hours}, ${zone}`);
-    }
-  );
+function initDb() {
+  db.run(`CREATE TABLE IF NOT EXISTS shifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    username TEXT,
+    date TEXT,
+    time TEXT,
+    strefa TEXT
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS subscriptions (
+    user_id INTEGER,
+    strefa TEXT
+  )`);
+}
+initDb();
+
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, 'Siema! Wysyłaj mi zmianę w formacie np: "oddaję 03.05, 14:00–18:00, Bemowo" albo po ludzku typu "dziś 11:30–14 Praga", a ja ją ogarnę i rozeslę dalej. Możesz też zapisać się na powiadomienia: /powiadomienia_on Wilanów');
 });
 
-// === ODCZYT ZMIAN ===
-bot.onText(/zobacz zmiany (.+)/i, (msg, match) => {
-  const zoneRaw = match[1];
-  const zone = parseZone(zoneRaw);
-  if (!zone) {
-    bot.sendMessage(msg.chat.id, `Nie rozpoznano strefy "${zoneRaw}".`);
-    return;
-  }
+bot.onText(/\/powiadomienia_on (.+)/, (msg, match) => {
+  const strefa = normalizujStrefe(match[1]);
+  if (!strefa) return bot.sendMessage(msg.chat.id, 'Nie rozpoznano strefy.');
+  db.run('INSERT INTO subscriptions (user_id, strefa) VALUES (?, ?)', [msg.from.id, strefa]);
+  bot.sendMessage(msg.chat.id, `OK, będziesz dostawać powiadomienia o zmianach w strefie: ${strefa}`);
+});
 
-  db.all(`SELECT * FROM shifts WHERE zone = ? ORDER BY date ASC`, [zone], (err, rows) => {
-    if (!rows || rows.length === 0) {
-      bot.sendMessage(msg.chat.id, `Brak dostępnych zmian w strefie ${zone}.`);
-      return;
-    }
+bot.onText(/\/powiadomienia_off (.+)/, (msg, match) => {
+  const strefa = normalizujStrefe(match[1]);
+  if (!strefa) return bot.sendMessage(msg.chat.id, 'Nie rozpoznano strefy.');
+  db.run('DELETE FROM subscriptions WHERE user_id = ? AND strefa = ?', [msg.from.id, strefa]);
+  bot.sendMessage(msg.chat.id, `Powiadomienia o ${strefa} wyłączone.`);
+});
 
-    const list = rows.map(s => `${s.user}: ${s.date} ${s.hours}`).join('\n');
-    bot.sendMessage(msg.chat.id, `Dostępne zmiany w strefie ${zone}:\n${list}`);
+bot.onText(/\/powiadomienia_off_all/, (msg) => {
+  db.run('DELETE FROM subscriptions WHERE user_id = ?', [msg.from.id]);
+  bot.sendMessage(msg.chat.id, `Wszystkie powiadomienia wyłączone.`);
+});
+
+bot.on('message', (msg) => {
+  const text = msg.text;
+  if (!text || text.startsWith('/')) return;
+
+  const strefa = normalizujStrefe(text);
+  const date = extractDate(text);
+  const time = extractTime(text);
+  if (!strefa || !date || !time) return;
+
+  db.get('SELECT * FROM shifts WHERE user_id = ? AND date = ? AND time = ? AND strefa = ?', [msg.from.id, date, time, strefa], (err, row) => {
+    if (row) return bot.sendMessage(msg.chat.id, 'Już masz dodaną taką zmianę.');
+    db.run('INSERT INTO shifts (user_id, username, date, time, strefa) VALUES (?, ?, ?, ?, ?)',
+      [msg.from.id, msg.from.username || '', date, time, strefa]);
+
+    bot.sendMessage(msg.chat.id, `Zapisano zmianę: ${date} / ${time} / ${strefa}`);
+
+    db.all('SELECT user_id FROM subscriptions WHERE strefa = ?', [strefa], (err, rows) => {
+      if (rows.length > 0) {
+        rows.forEach(row => {
+          if (row.user_id !== msg.from.id) {
+            bot.sendMessage(row.user_id, `Nowa zmiana dostępna: ${date} / ${time} / ${strefa}`);
+          }
+        });
+      }
+    });
   });
 });

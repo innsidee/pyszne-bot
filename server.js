@@ -137,6 +137,13 @@ bot.on('message', msg => {
       if (err || !rows.length) return bot.sendMessage(chatId, `Brak dostępnych zmian w strefie ${strefa}.`);
       const list = rows.map(r => `${r.username}: ${r.date} ${r.time}`).join('\n');
       bot.sendMessage(chatId, `Dostępne zmiany w strefie ${strefa}:\n${list}`);
+    
     });
+    
   }
+  
 });
+
+app.get('/', (req, res) => res.send('Bot działa.'));
+app.listen(PORT, () => console.log(`Serwer działa na porcie ${PORT}`));
+

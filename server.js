@@ -12,7 +12,6 @@ const PORT = process.env.PORT || 3000;
 
 const db = new sqlite3.Database('shifts.db');
 
-// tabela zmian
 db.run(`
   CREATE TABLE IF NOT EXISTS shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +75,17 @@ function znajdzGodziny(text) {
 let pendingConfirmation = {};
 let pendingTaker = {};
 
+bot.onText(/\/start/, msg => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, 'Cześć! Wybierz akcję:', {
+    reply_markup: {
+      keyboard: [['Zobacz zmiany', 'Oddaj zmianę']],
+      resize_keyboard: true,
+      one_time_keyboard: true
+    }
+  });
+});
+
 bot.on('message', msg => {
   const text = msg.text.toLowerCase();
   const chatId = msg.chat.id;
@@ -138,9 +148,9 @@ bot.on('message', msg => {
   if (text.includes('zobacz zmiany')) {
     const strefa = znajdzStrefe(text);
     if (!strefa) return bot.sendMessage(chatId, 'Podaj strefę.');
-    db.all('SELECT rowid, username, date, time FROM shifts WHERE strefa = ?', [strefa], (err, rows) => {
+    db.all('SELECT id, username, date, time FROM shifts WHERE strefa = ?', [strefa], (err, rows) => {
       if (!rows || !rows.length) return bot.sendMessage(chatId, 'Brak zmian.');
-      const list = rows.map(r => `${r.rowid}: ${r.date} ${r.time} (${r.username})`).join('\n');
+      const list = rows.map(r => `${r.id}: ${r.date} ${r.time} (${r.username})`).join('\n');
       bot.sendMessage(chatId, `Dostępne zmiany:\n${list}\n\nNapisz np. „Chcę zmianę 3”`);
     });
     return;

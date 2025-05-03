@@ -79,19 +79,46 @@ function znajdzGodziny(msg) {
 }
 
 // Обработка сообщений
+// ... всё как раньше до строки bot.on('message'...
+
+let pendingConfirmation = {};
+
 bot.on('message', msg => {
   const text = msg.text.toLowerCase();
   const chatId = msg.chat.id;
+  const user = msg.from.username || msg.from.first_name;
 
-  // Команда: отдать смену
+  // Проверка на подтверждение
+  if (pendingConfirmation[chatId]) {
+    if (text.includes('tak') || text.includes('zgadza')) {
+      const { date, time, strefa } = pendingConfirmation[chatId];
+      db.run('INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)', [user, date, time, strefa], err => {
+        if (err) return bot.sendMessage(chatId, 'Błąd zapisu.');
+        bot.sendMessage(chatId, `Zapisano: ${user}, ${date} ${time}, ${strefa}`);
+        delete pendingConfirmation[chatId];
+      });
+      return;
+    } else {
+      bot.sendMessage(chatId, 'OK, nie zapisuję.');
+      delete pendingConfirmation[chatId];
+      return;
+    }
+  }
+
+  // Смена
   if (text.includes('oddaj') || text.includes('oddaje')) {
     const strefa = znajdzStrefe(text);
     const date = znajdzDate(text);
     const time = znajdzGodziny(text);
-    const user = msg.from.username || msg.from.first_name;
 
     if (!strefa || !date || !time) {
-      return bot.sendMessage(chatId, 'Nie rozumiem formatu. Przykład: Oddaję 03.05 14:00–17:00 Praga');
+      // Попытка догадаться
+      if (strefa || date || time) {
+        pendingConfirmation[chatId] = { strefa, date, time };
+        return bot.sendMessage(chatId, `Nie rozumiem dokładnie. Czy chodzi Ci o: ${date || '?'}, ${time || '?'}, ${strefa || '?'}`);
+      } else {
+        return bot.sendMessage(chatId, 'Nie rozumiem formatu. Przykład: Oddaję 03.05 14:00–17:00 Praga');
+      }
     }
 
     db.run('INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)', [user, date, time, strefa], err => {
@@ -101,7 +128,7 @@ bot.on('message', msg => {
     return;
   }
 
-  // Команда: zobacz zmiany
+  // Просмотр
   if (text.includes('zobacz zmiany')) {
     const strefa = znajdzStrefe(text);
     if (!strefa) return bot.sendMessage(chatId, 'Podaj nazwę strefy.');
@@ -112,12 +139,4 @@ bot.on('message', msg => {
       bot.sendMessage(chatId, `Dostępne zmiany w strefie ${strefa}:\n${list}`);
     });
   }
-});
-
-app.get('/', (req, res) => {
-  res.send('Bot działa.');
-});
-
-app.listen(PORT, () => {
-  console.log(`Serwer działa na porcie ${PORT}`);
 });

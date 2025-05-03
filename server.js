@@ -13,7 +13,6 @@ const PORT = process.env.PORT || 3000;
 
 const db = new sqlite3.Database('shifts.db');
 
-// Инициализация таблицы
 db.run(`
   CREATE TABLE IF NOT EXISTS shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +39,6 @@ const STREFY = {
   łomianki: ['lomianki', 'łomianki']
 };
 
-// Утилита для нормализации стрефы
 function znajdzStrefe(msg) {
   const tekst = msg.toLowerCase();
   for (const [klucz, warianty] of Object.entries(STREFY)) {
@@ -49,7 +47,6 @@ function znajdzStrefe(msg) {
   return null;
 }
 
-// Утилита для извлечения даты
 function znajdzDate(msg) {
   const dzisiaj = new Date();
   const jutro = new Date(Date.now() + 86400000);
@@ -68,7 +65,6 @@ function znajdzDate(msg) {
   return null;
 }
 
-// Утилита для времени
 function znajdzGodziny(msg) {
   const regex = /(\d{1,2}[:.]?\d{0,2})\D+(\d{1,2}[:.]?\d{0,2})/;
   const match = msg.match(regex);
@@ -78,17 +74,53 @@ function znajdzGodziny(msg) {
   return `${clean(match[1])}–${clean(match[2])}`;
 }
 
-// Обработка сообщений
-// ... всё как раньше до строки bot.on('message'...
-
 let pendingConfirmation = {};
+let stepContext = {};
+
+bot.onText(/\/start/, msg => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, 'Wybierz akcję:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: 'Zobacz zmiany', callback_data: 'view' }],
+        [{ text: 'Oddaj zmianę', callback_data: 'give' }]
+      ]
+    }
+  });
+});
+
+bot.on('callback_query', query => {
+  const chatId = query.message.chat.id;
+  const username = query.from.username || query.from.first_name;
+
+  if (query.data === 'view') {
+    bot.sendMessage(chatId, 'Podaj nazwę strefy, np. "centrum"');
+    stepContext[chatId] = { step: 'view_strefa' };
+  }
+
+  if (query.data === 'give') {
+    bot.sendMessage(chatId, 'Wybierz strefę:', {
+      reply_markup: {
+        keyboard: [
+          ['centrum', 'ursus'],
+          ['bemowo/bielany', 'praga'],
+          ['wawer', 'ursus', 'wilanów'],
+          ['legionowo', 'łomianki'],
+        ],
+        one_time_keyboard: true,
+        resize_keyboard: true
+      }
+    });
+    stepContext[chatId] = { step: 'give_strefa' };
+  }
+});
 
 bot.on('message', msg => {
   const text = msg.text.toLowerCase();
   const chatId = msg.chat.id;
   const user = msg.from.username || msg.from.first_name;
 
-  // Проверка на подтверждение
+  // Подтверждение распознанной смены
   if (pendingConfirmation[chatId]) {
     if (text.includes('tak') || text.includes('zgadza')) {
       const { date, time, strefa } = pendingConfirmation[chatId];
@@ -105,14 +137,60 @@ bot.on('message', msg => {
     }
   }
 
-  // Смена
+  // Шаги с кнопками
+  const ctx = stepContext[chatId];
+  if (ctx) {
+    if (ctx.step === 'view_strefa') {
+      const strefa = znajdzStrefe(text);
+      if (!strefa) return bot.sendMessage(chatId, 'Nie rozpoznano strefy.');
+
+      db.all('SELECT username, date, time FROM shifts WHERE strefa = ?', [strefa], (err, rows) => {
+        if (err || !rows.length) return bot.sendMessage(chatId, `Brak dostępnych zmian w strefie ${strefa}.`);
+        const list = rows.map(r => `${r.username}: ${r.date} ${r.time}`).join('\n');
+        bot.sendMessage(chatId, `Dostępne zmiany w strefie ${strefa}:\n${list}`);
+        delete stepContext[chatId];
+      });
+      return;
+    }
+
+    if (ctx.step === 'give_strefa') {
+      ctx.strefa = znajdzStrefe(text);
+      bot.sendMessage(chatId, 'Podaj datę (np. dzisiaj, jutro, albo 05.05)');
+      ctx.step = 'give_date';
+      return;
+    }
+
+    if (ctx.step === 'give_date') {
+      ctx.date = znajdzDate(text);
+      bot.sendMessage(chatId, 'Podaj godziny (np. 11–15)');
+      ctx.step = 'give_time';
+      return;
+    }
+
+    if (ctx.step === 'give_time') {
+      ctx.time = znajdzGodziny(text);
+      const { strefa, date, time } = ctx;
+      if (strefa && date && time) {
+        db.run('INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)', [user, date, time, strefa], err => {
+          if (err) return bot.sendMessage(chatId, 'Błąd zapisu.');
+          bot.sendMessage(chatId, `Zapisano: ${user}, ${date} ${time}, ${strefa}`);
+          delete stepContext[chatId];
+        });
+      } else {
+        bot.sendMessage(chatId, 'Nie rozumiem formatu. Spróbuj ponownie.');
+        delete stepContext[chatId];
+      }
+      return;
+    }
+  }
+
+  // Текстовая смена без кнопок
   if (text.includes('oddaj') || text.includes('oddaje')) {
     const strefa = znajdzStrefe(text);
     const date = znajdzDate(text);
     const time = znajdzGodziny(text);
 
     if (!strefa || !date || !time) {
-      // Попытка догадаться
       if (strefa || date || time) {
         pendingConfirmation[chatId] = { strefa, date, time };
         return bot.sendMessage(chatId, `Nie rozumiem dokładnie. Czy chodzi Ci o: ${date || '?'}, ${time || '?'}, ${strefa || '?'}`);
@@ -127,22 +205,8 @@ bot.on('message', msg => {
     });
     return;
   }
+});
 
-  // Просмотр
-  if (text.includes('zobacz zmiany')) {
-    const strefa = znajdzStrefe(text);
-    if (!strefa) return bot.sendMessage(chatId, 'Podaj nazwę strefy.');
-
-    db.all('SELECT username, date, time FROM shifts WHERE strefa = ?', [strefa], (err, rows) => {
-      if (err || !rows.length) return bot.sendMessage(chatId, `Brak dostępnych zmian w strefie ${strefa}.`);
-      const list = rows.map(r => `${r.username}: ${r.date} ${r.time}`).join('\n');
-      bot.sendMessage(chatId, `Dostępne zmiany w strefie ${strefa}:\n${list}`);
-    
-    });
-
-    
-  }
-  
-}); app.get('/', (req, res) => res.send('Bot działa.'));
+// Запуск Express-сервера
+app.get('/', (req, res) => res.send('Bot działa.'));
 app.listen(PORT, () => console.log(`Serwer działa na porcie ${PORT}`));
-

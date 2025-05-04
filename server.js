@@ -1,5 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
+const axios = require('axios');
 const dotenv = require('dotenv');
 const sqlite3 = require('sqlite3').verbose();
 const util = require('util');
@@ -370,6 +371,20 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000); // Проверка каждые 5 минут
 
+ });
+});
+
+// Antyzasypiacz (ping co 4 minuty)
+setInterval(() => {
+  const url = process.env.RENDER_EXTERNAL_URL;
+  if (url) {
+    axios.get(url).then(() => {
+      console.log('Ping do samego siebie wysłany');
+    }).catch((err) => {
+      console.error('Błąd pingu:', err.message);
+    });
+  }
+}, 240000); // 4 minuty
 // Веб-сервер
 app.get('/', (_, res) => res.send('Bot is running'));
 app.listen(PORT, () => {

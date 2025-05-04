@@ -84,7 +84,7 @@ process.on('SIGINT', () => {
   });
 });
 
-function clearSession(chatId) {
+async function clearSession(chatId) {
   const sess = session[chatId];
   if (sess?.messagesToDelete) {
     for (const id of sess.messagesToDelete) {
@@ -333,5 +333,4 @@ bot.on('message', async (msg) => {
         }
       } catch (error) {
         console.error('Błąd podczas przekazywania zmiany:', error);
-        await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany.');
-      } finally {
+        await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany

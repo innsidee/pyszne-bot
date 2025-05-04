@@ -255,7 +255,7 @@ bot.on('message', async (msg) => {
       updateLastCommand(chatId);
       session[chatId] = { mode: 'view', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
       const message = await bot.sendMessage(chatId, 'Wybierz strefę:', zonesKeyboard);
-      session[chatId].messagesToDelete.push(message.message_id);
+      session[msg.chatId].messagesToDelete.push(message.message_id);
       return;
     }
 
@@ -290,6 +290,4 @@ bot.on('message', async (msg) => {
 
       if (sess.strefa && !sess.date) {
         const date = parseDate(text);
-        if (!date) return await sendErr(chatId, sess, 'Zły format daty. Napisz np. dzisiaj, jutro lub DD.MM.RRRR.');
-        sess.date = date;
-        const msg2 = await bot.sendMessage(chatId, 'W jakich godzinach była zmiana? (np. 11:
+        if (!date) return await sendErr(chatId, sess

@@ -55,6 +55,7 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS shifts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL,
+      chat_id INTEGER NOT NULL,  -- Dodajemy pole chat_id
       date TEXT NOT NULL,
       time TEXT NOT NULL,
       strefa TEXT NOT NULL,
@@ -185,7 +186,7 @@ bot.onText(/\/cancel/, async (msg) => {
   await bot.sendMessage(msg.chat.id, 'Operacja anulowana.', mainKeyboard);
 });
 
-// Подписка na zону
+// Подписка на зону
 bot.onText(/Subskrybuj strefę/, async (msg) => {
   updateLastCommand(msg.chat.id);
   session[msg.chat.id] = { mode: 'subskrypcja', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
@@ -269,7 +270,7 @@ bot.on('message', async (msg) => {
     if (sess.mode === 'view' && STREFY.includes(text)) {
       console.log(`Wybór strefy ${text} w trybie widoku dla ${chatId}`);
       try {
-        const rows = await db.all(`SELECT id, username, date, time FROM shifts WHERE strefa = ? ORDER BY created_at DESC`, [text]);
+        const rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = ? ORDER BY created_at DESC`, [text]);
         console.log(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
         if (!rows.length) {
           const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian w tej strefie.');
@@ -280,7 +281,7 @@ bot.on('message', async (msg) => {
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
-              { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${displayUsername}` }]] } }
+              { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
             );
             sess.messagesToDelete.push(msg3.message_id);
           }
@@ -315,9 +316,9 @@ bot.on('message', async (msg) => {
         if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
         sess.time = time;
         try {
-          await db.run(`INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)`,
-            [username, sess.date, sess.time, sess.strefa]);
-          console.log(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}`);
+          await db.run(`INSERT INTO shifts (username, chat_id, date, time, strefa) VALUES (?, ?, ?, ?, ?)`,
+            [username, chatId, sess.date, sess.time, sess.strefa]); // Zapisujemy chatId
+          console.log(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}, chatId: ${chatId}`);
           await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`);
           await notifySubscribers(sess.strefa, sess.date, sess.time, username);
         } catch (error) {
@@ -336,32 +337,39 @@ bot.on('message', async (msg) => {
       if (!imie || !nazwisko || !idk || isNaN(idk)) return await sendErr(chatId, sess, 'Błąd formatu. Podaj imię, nazwisko i ID kuriera, oddzielone spacjami (np. Jan Kowalski 12345).');
 
       try {
-        console.log(`Próba przejęcia zmiany: shiftId=${sess.shiftId}, giver=${sess.giver}`);
-        const shift = await db.get(`SELECT username, date, time, strefa FROM shifts WHERE id = ?`, [sess.shiftId]);
+        console.log(`Próba przejęcia zmiany: shiftId=${sess.shiftId}, giverChatId=${sess.giver}`);
+        const shift = await db.get(`SELECT username, chat_id, date, time, strefa FROM shifts WHERE id = ?`, [sess.shiftId]);
         if (!shift) {
           await bot.sendMessage(chatId, 'Ta zmiana już nie jest dostępna.');
           return;
         }
 
-        // Sprawdzenie, czy giver istnieje i jest poprawny
-        if (!sess.giver || typeof sess.giver !== 'string') {
-          console.error(`Nieprawidłowy giver: ${sess.giver}`);
+        // Sprawdzenie, czy giverChatId istnieje i jest poprawny
+        if (!shift.chat_id || isNaN(shift.chat_id)) {
+          console.error(`Nieprawidłowy chat_id osoby oddającej zmianę: ${shift.chat_id}`);
           await bot.sendMessage(chatId, 'Błąd: Nie można skontaktować się z osobą oddającą zmianę.');
           return;
         }
 
-        // Próba wysłania wiadomości do giver
+        let notificationSent = false; // Flaga śledząca, czy powiadomienie się udało
+
+        // Próba wysłania wiadomości do giver (używamy chat_id z bazy danych)
         try {
-          await bot.sendMessage(sess.giver,
+          await bot.sendMessage(shift.chat_id,
             `@${username} (${imie} ${nazwisko}, ID: ${idk}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}, Strefa: ${shift.strefa}\nSkontaktuj się z nim, aby ustalić szczegóły.`);
-          console.log(`Wiadomość wysłana do ${sess.giver}`);
+          console.log(`Wiadomość wysłana do chatId ${shift.chat_id} (@${shift.username})`);
+          notificationSent = true; // Ustawiamy flagę na true, jeśli się udało
         } catch (error) {
-          console.error(`Błąd wysyłania wiadomości do ${sess.giver}:`, error.message);
-          await bot.sendMessage(chatId, `Nie udało się powiadomić @${sess.giver}. Skontaktuj się z nim ręcznie.`);
+          console.error(`Błąd wysyłania wiadomości do chatId ${shift.chat_id} (@${shift.username}):`, error.message);
+          await bot.sendMessage(chatId, `Nie udało się powiadomić @${shift.username}. Skontaktuj się z nim ręcznie, aby ustalić szczegóły przejęcia zmiany. Może być konieczne rozpoczęcie rozmowy z botem przez @${shift.username} (np. wpisanie /start).`);
         }
 
-        // Wysłanie potwierdzenia do użytkownika
-        await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${sess.giver}. Skontaktuj się z nim w celu ustalenia szczegółów.`);
+        // Wysłanie potwierdzenia do użytkownika tylko, jeśli powiadomienie się udało
+        if (notificationSent) {
+          await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${shift.username}. Skontaktuj się z nim w celu ustalenia szczegółów.`);
+        }
+
+        // Usunięcie zmiany z bazy danych
         await db.run(`DELETE FROM shifts WHERE id = ?`, [sess.shiftId]);
         console.log(`Zmiana o ID ${sess.shiftId} usunięta z bazy danych`);
       } catch (error) {

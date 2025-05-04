@@ -19,6 +19,8 @@ const db = new sqlite3.Database('shifts.db', (err) => {
   if (err) {
     console.error('Błąd DB:', err);
     process.exit(1);
+  } else {
+    console.log('Baza danych shifts.db podłączona pomyślnie');
   }
 });
 db.run = util.promisify(db.run);
@@ -42,8 +44,10 @@ const zonesKeyboard = {
 };
 
 async function initializeDatabase() {
+  console.log('Inicjalizacja bazy danych...');
   await db.run(`CREATE TABLE IF NOT EXISTS shifts (id INTEGER PRIMARY KEY, username TEXT, date TEXT, time TEXT, strefa TEXT)`);
   await db.run(`CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY, user_id INTEGER, strefa TEXT)`);
+  console.log('Baza danych zainicjalizowana pomyślnie');
 }
 initializeDatabase();
 
@@ -89,4 +93,108 @@ bot.on('callback_query', async (query) => {
     await db.run(`INSERT INTO subscriptions (user_id, strefa) VALUES (?, ?)`, [chatId, strefa]);
     await bot.sendMessage(chatId, `Zapisano subskrypcję na: ${strefa}`, mainKeyboard);
     if (session[chatId]?.messagesToDelete) {
-      for (const id of session[chatId].messagesToDelete) await bot.deleteMessage(chatId, id).catch(()
+      for (const id of session[chatId].messagesToDelete) await bot.deleteMessage(chatId, id).catch(() => {});
+    }
+    delete session[chatId];
+  } else if (data.startsWith('koord_')) {
+    const takerId = data.split('_')[1];
+    await bot.sendMessage(takerId, 'Właściciel zmiany napisał do koordynatora!');
+    await bot.answerCallbackQuery(query.id, { text: 'Dzięki!' });
+  } else if (data.startsWith('take_')) {
+    const [_, id, giver] = data.split('_');
+    session[chatId] = { mode: 'take', shiftId: id, giver, messagesToDelete: [], userMessages: [] };
+    const message = await bot.sendMessage(chatId, 'Podaj swoje imię, nazwisko i ID kuriera (np. Jan Kowalski 12345)');
+    session[chatId].messagesToDelete.push(message.message_id);
+  }
+});
+
+// Начало отдачи смены
+bot.onText(/Oddaj zmianę/, async (msg) => {
+  session[msg.chat.id] = { mode: 'oddaj', messagesToDelete: [], userMessages: [] };
+  const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
+  session[msg.chat.id].messagesToDelete.push(message.message_id);
+});
+
+bot.on('message', async (msg) => {
+  const text = msg.text?.trim();
+  const chatId = msg.chat.id;
+  const user = msg.from.username || msg.from.first_name;
+  if (text?.startsWith('/')) return;
+
+  const sess = session[chatId];
+  if (!sess) return;
+
+  if (!sess.userMessages) sess.userMessages = [];
+  sess.userMessages.push(msg.message_id);
+
+  console.log(`Получено сообщение от ${chatId}: "${text}", режим: ${sess?.mode || 'нет'}`);
+
+  try {
+    if (text === 'Powrót') {
+      await cleanup(chatId);
+      return await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
+    }
+
+    // Просмотр смен
+    if (text.toLowerCase().includes('zobaczyć zmiany')) {
+      const msg = await bot.sendMessage(chatId, 'Wybierz strefę:', zonesKeyboard);
+      session[chatId] = { mode: 'view', messagesToDelete: [msg.message_id], userMessages: [] };
+      return;
+    }
+
+    // Выбор зоны для просмотра смен
+    if (sess.mode === 'view' && STREFY.includes(text)) {
+      console.log(`Выбор зоны ${text} в режиме просмотра для ${chatId}`);
+      const rows = await db.all(`SELECT rowid, username, date, time FROM shifts WHERE strefa = ?`, [text]);
+      if (!rows.length) {
+        const msg2 = await bot.sendMessage(chatId, 'Brak zmian.');
+        sess.messagesToDelete.push(msg2.message_id);
+      } else {
+        for (const row of rows) {
+          const msg3 = await bot.sendMessage(
+            chatId,
+            `${row.rowid}: ${row.date} ${row.time}\nNapisał: @${row.username}\nChcesz przejąć tę zmianę?`,
+            { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.rowid}_${row.username}` }]] } }
+          );
+          sess.messagesToDelete.push(msg3.message_id);
+        }
+      }
+      return await cleanup(chatId, true);
+    }
+
+    // Отдача смены
+    if (sess.mode === 'oddaj') {
+      if (!sess.strefa && STREFY.includes(text)) {
+        sess.strefa = text;
+        const msg1 = await bot.sendMessage(chatId, 'Kiedy? (np. dzisiaj, jutro, albo 05.05)');
+        sess.messagesToDelete.push(msg1.message_id);
+        return;
+      }
+
+      if (sess.strefa && !sess.date) {
+        const date = parseDate(text);
+        if (!date) return await sendErr(chatId, sess, 'Zły format daty. Napisz np. 05.05');
+        sess.date = date;
+        const msg2 = await bot.sendMessage(chatId, 'O jakich godzinach? (np. 11:00-19:00)');
+        sess.messagesToDelete.push(msg2.message_id);
+        return;
+      }
+
+      if (sess.date && !sess.time) {
+        const time = parseTime(text);
+        if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
+        sess.time = time;
+        await db.run(`INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)`,
+          [user, sess.date, sess.time, sess.strefa]);
+        await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`);
+        await notifySubscribers(sess.strefa, sess.date, sess.time);
+        return await cleanup(chatId, true);
+      }
+    }
+
+    // Передача смены
+    if (sess.mode === 'take') {
+      const [imie, nazwisko, idk] = text.split(/\s+/);
+      if (!imie || !nazwisko || !idk || isNaN(idk)) return await sendErr(chatId, sess, 'Błąd formatu. Podaj np. Jan Kowalski 12345');
+      await bot.sendMessage(sess.giver,
+        `@${msg.from.username} chce przejąć Twoją zmianę!\nD

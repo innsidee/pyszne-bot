@@ -75,7 +75,7 @@ const lastCommand = {};
 // Начальная клавиатура
 const mainKeyboard = {
   reply_markup: {
-    keyboard: [['Oddaj zmianę', 'Zobacz zmiany'], ['Subskrybuj strefę']],
+    keyboard: [['Oddaj zmianę', 'Zobaczyć zmiany'], ['Subskrybuj strefę']], // Исправлено на "Zobaczyć zmiany"
     resize_keyboard: true,
   },
 };
@@ -161,4 +161,57 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, { text: 'Dzięki!' });
     } else if (data.startsWith('take_')) {
       const [_, id, giver] = data.split('_');
-      session[chatId] = { mode
+      session[chatId] = { mode: 'take', shiftId: id, giver, messagesToDelete: [], userMessages: [] };
+      const message = await bot.sendMessage(chatId, 'Podaj swoje imię, nazwisko i ID kuriera (np. Jan Kowalski 12345)');
+      session[chatId].messagesToDelete.push(message.message_id);
+    }
+  } catch (err) {
+    console.error('Ошибка обработки callback_query:', err);
+    await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie.');
+  }
+});
+
+// Oddanie смены
+bot.onText(/Oddaj zmianę/, async (msg) => {
+  try {
+    if (!checkRateLimit(msg.chat.id)) {
+      console.log(`Rate limit: Пользователь ${msg.chat.id} отправил "Oddaj zmianę" слишком быстро`);
+      await bot.sendMessage(msg.chat.id, 'Zbyt szybko! Poczekaj chwilę.');
+      return;
+    }
+    session[msg.chat.id] = { messagesToDelete: [], userMessages: [] };
+    const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
+    session[msg.chat.id].messagesToDelete.push(message.message_id);
+  } catch (err) {
+    console.error('Ошибка команды Oddaj zmianę:', err);
+  }
+});
+
+// Обработка текстовых сообщений
+bot.on('message', async (msg) => {
+  const text = msg.text.trim(); // Удаляем лишние пробелы
+  const chatId = msg.chat.id;
+  const user = msg.from.username || msg.from.first_name;
+
+  // Пропуск команд
+  if (text.startsWith('/')) return;
+
+  // Сохраняем message_id пользователя
+  const sess = session[chatId];
+  if (sess) {
+    if (!sess.userMessages) sess.userMessages = [];
+    sess.userMessages.push(msg.message_id);
+  }
+
+  console.log(`Получено сообщение от ${chatId}: "${text}"`); // Логирование для отладки
+
+  try {
+    if (!sess) {
+      console.log(`Сессия для пользователя ${chatId} не найдена`);
+      return;
+    }
+
+    // Обработка кнопки "Powrót"
+    if (text === 'Powrót') {
+      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
+      // Удаляем предыдущие сообщения

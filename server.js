@@ -292,45 +292,4 @@ bot.on('message', async (msg) => {
         const date = parseDate(text);
         if (!date) return await sendErr(chatId, sess, 'Zły format daty. Napisz np. dzisiaj, jutro lub DD.MM.RRRR.');
         sess.date = date;
-        const msg2 = await bot.sendMessage(chatId, 'W jakich godzinach była zmiana? (np. 11:00-19:00)');
-        sess.messagesToDelete.push(msg2.message_id);
-        return;
-      }
-
-      if (sess.date && !sess.time) {
-        const time = parseTime(text);
-        if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. HH:MM-HH:MM.');
-        sess.time = time;
-        try {
-          await db.run(`INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)`,
-            [username, sess.date, sess.time, sess.strefa]);
-          await bot.sendMessage(chatId, `Zapisano Twoją zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}`);
-          await notifySubscribers(sess.strefa, sess.date, sess.time, username);
-        } catch (error) {
-          console.error('Błąd podczas dodawania zmiany:', error);
-          await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania zmiany.');
-        } finally {
-          clearSession(chatId);
-        }
-        return;
-      }
-    }
-
-    // Передача смены
-    if (sess.mode === 'take') {
-      const [imie, nazwisko, idk] = text.split(/\s+/);
-      if (!imie || !nazwisko || !idk || isNaN(idk)) return await sendErr(chatId, sess, 'Błąd formatu. Podaj imię, nazwisko i ID kuriera, oddzielone spacjami (np. Jan Kowalski 12345).');
-
-      try {
-        const shift = await db.get(`SELECT username, date, time, strefa FROM shifts WHERE id = ?`, [sess.shiftId]);
-        if (shift) {
-          await bot.sendMessage(sess.giver,
-            `@${username} (${imie} ${nazwisko}, ID: ${idk}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}, Strefa: ${shift.strefa}\nSkontaktuj się z nim, aby ustalić szczegóły.`);
-          await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${sess.giver}. Skontaktuj się z nim w celu ustalenia szczegółów.`);
-          await db.run(`DELETE FROM shifts WHERE id = ?`, [sess.shiftId]);
-        } else {
-          await bot.sendMessage(chatId, 'Ta zmiana już nie jest dostępna.');
-        }
-      } catch (error) {
-        console.error('Błąd podczas przekazywania zmiany:', error);
-        await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany
+        const msg2 = await bot.sendMessage(chatId, 'W jakich godzinach była zmiana? (np. 11:

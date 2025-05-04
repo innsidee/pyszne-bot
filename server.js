@@ -100,8 +100,20 @@ bot.onText(/\/start/, async (msg) => {
 // Команда /cancel
 bot.onText(/\/cancel/, async (msg) => {
   try {
-    delete session[msg.chat.id];
-    await bot.sendMessage(msg.chat.id, 'Operacja anulowana.', mainKeyboard);
+    const chatId = msg.chat.id;
+    const sess = session[chatId];
+    if (sess?.messagesToDelete) {
+      for (const messageId of sess.messagesToDelete) {
+        await bot.deleteMessage(chatId, messageId).catch(() => {});
+      }
+    }
+    if (sess?.userMessages) {
+      for (const messageId of sess.userMessages) {
+        await bot.deleteMessage(chatId, messageId).catch(() => {});
+      }
+    }
+    delete session[chatId];
+    await bot.sendMessage(chatId, 'Operacja anulowana.', mainKeyboard);
   } catch (err) {
     console.error('Ошибка команды /cancel:', err);
   }
@@ -120,7 +132,7 @@ bot.onText(/Subskrybuj strefę/, async (msg) => {
         inline_keyboard: STREFY.map((s) => [{ text: s, callback_data: `sub_${s}` }]),
       },
     });
-    session[msg.chat.id] = { messagesToDelete: [message.message_id] };
+    session[msg.chat.id] = { messagesToDelete: [message.message_id], userMessages: [] };
   } catch (err) {
     console.error('Ошибка команды Subskrybuj strefę:', err);
   }
@@ -149,249 +161,4 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, { text: 'Dzięki!' });
     } else if (data.startsWith('take_')) {
       const [_, id, giver] = data.split('_');
-      session[chatId] = { mode: 'take', shiftId: id, giver, messagesToDelete: [] };
-      const message = await bot.sendMessage(chatId, 'Podaj swoje imię, nazwisko i ID kuriera (np. Jan Kowalski 12345)');
-      session[chatId].messagesToDelete.push(message.message_id);
-    }
-  } catch (err) {
-    console.error('Ошибка обработки callback_query:', err);
-    await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie.');
-  }
-});
-
-// Oddanie смены
-bot.onText(/Oddaj zmianę/, async (msg) => {
-  try {
-    if (!checkRateLimit(msg.chat.id)) {
-      console.log(`Rate limit: Пользователь ${msg.chat.id} отправил "Oddaj zmianę" слишком быстро`);
-      await bot.sendMessage(msg.chat.id, 'Zbyt szybko! Poczekaj chwilę.');
-      return;
-    }
-    session[msg.chat.id] = { messagesToDelete: [] };
-    const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
-    session[msg.chat.id].messagesToDelete.push(message.message_id);
-  } catch (err) {
-    console.error('Ошибка команды Oddaj zmianę:', err);
-  }
-});
-
-// Обработка текстовых сообщений
-bot.on('message', async (msg) => {
-  const text = msg.text;
-  const chatId = msg.chat.id;
-  const user = msg.from.username || msg.from.first_name;
-
-  // Пропуск команд
-  if (text.startsWith('/')) return;
-
-  try {
-    const sess = session[chatId];
-    if (!sess) {
-      console.log(`Сессия для пользователя ${chatId} не найдена`);
-      return;
-    }
-
-    // Обработка кнопки "Powrót"
-    if (text === 'Powrót') {
-      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
-      // Удаляем предыдущие сообщения
-      if (sess.messagesToDelete) {
-        for (const messageId of sess.messagesToDelete) {
-          await bot.deleteMessage(chatId, messageId).catch(() => {});
-        }
-      }
-      delete session[chatId];
-      return;
-    }
-
-    // Выбор зоны для отдачи смены
-    if (!sess.strefa && STREFY.includes(text)) {
-      sess.strefa = text;
-      const message = await bot.sendMessage(chatId, 'Kiedy? (np. dzisiaj, jutro, albo 05.05)');
-      sess.messagesToDelete.push(message.message_id);
-      return;
-    }
-
-    // Парсинг даты
-    if (sess.strefa && !sess.date) {
-      const date = parseDate(text);
-      if (!date) {
-        const message = await bot.sendMessage(chatId, 'Zły format daty. Napisz np. 05.05');
-        sess.messagesToDelete.push(message.message_id);
-        return;
-      }
-      sess.date = date;
-      const message = await bot.sendMessage(chatId, 'O jakich godzinach? (np. 11:00-19:00)');
-      sess.messagesToDelete.push(message.message_id);
-      return;
-    }
-
-    // Парсинг времени
-    if (sess.date && !sess.time) {
-      const time = parseTime(text);
-      if (!time) {
-        const message = await bot.sendMessage(chatId, 'Zły format godzin. Napisz np. 11:00-19:00');
-        sess.messagesToDelete.push(message.message_id);
-        return;
-      }
-      sess.time = time;
-      await db.run(
-        `INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)`,
-        [user, sess.date, sess.time, sess.strefa]
-      );
-      await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`);
-      await notifySubscribers(sess.strefa, sess.date, sess.time);
-
-      // Удаляем предыдущие сообщения
-      if (sess.messagesToDelete) {
-        for (const messageId of sess.messagesToDelete) {
-          await bot.deleteMessage(chatId, messageId).catch(() => {});
-        }
-      }
-
-      // Возвращаем начальное меню
-      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
-      delete session[chatId];
-      return;
-    }
-
-    // Просмотр смен
-    if (text === 'Zobacz zmiany') { // Упрощаем проверку
-      if (!checkRateLimit(chatId)) {
-        console.log(`Rate limit: Пользователь ${chatId} отправил "Zobacz zmiany" слишком быстро`);
-        await bot.sendMessage(chatId, 'Zbyt szybko! Poczekaj chwilę.');
-        return;
-      }
-      const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
-      session[chatId] = { mode: 'view', messagesToDelete: [message.message_id] };
-      return;
-    }
-
-    // Выбор зоны для просмотра смен
-    if (sess.mode === 'view' && STREFY.includes(text)) {
-      const rows = await db.all(`SELECT rowid, username, date, time FROM shifts WHERE strefa = ?`, [text]);
-      if (!rows.length) {
-        const message = await bot.sendMessage(chatId, 'Brak zmian.');
-        sess.messagesToDelete.push(message.message_id);
-      } else {
-        for (const row of rows) {
-          const message = await bot.sendMessage(
-            chatId,
-            `${row.rowid}: ${row.date} ${row.time}\nNapisał: @${row.username}\nChcesz przejąć tę zmianę?`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [{ text: 'Przejmuję zmianę', callback_data: `take_${row.rowid}_${row.username}` }],
-                ],
-              },
-            }
-          );
-          sess.messagesToDelete.push(message.message_id);
-        }
-      }
-      // Возвращаем начальное меню после просмотра
-      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
-      // Удаляем предыдущие сообщения
-      if (sess.messagesToDelete) {
-        for (const messageId of sess.messagesToDelete) {
-          await bot.deleteMessage(chatId, messageId).catch(() => {});
-        }
-      }
-      delete session[chatId];
-      return;
-    }
-
-    // Обработка данных для взятия смены
-    if (sess.mode === 'take') {
-      const [imie, nazwisko, idk] = text.trim().split(/\s+/);
-      if (!imie || !nazwisko || !idk || isNaN(idk)) {
-        const message = await bot.sendMessage(chatId, 'Błąd formatu. Podaj np. Jan Kowalski 12345');
-        sess.messagesToDelete.push(message.message_id);
-        return;
-      }
-      await bot.sendMessage(
-        sess.giver,
-        `@${msg.from.username} chce przejąć Twoją zmianę!\nDane: ${imie} ${nazwisko}, ${idk}`,
-        {
-          reply_markup: {
-            inline_keyboard: [[{ text: 'Napisałem do koordynatora', callback_data: `koord_${chatId}` }]],
-          },
-        }
-      );
-      await bot.sendMessage(chatId, 'Dziękuję, właściciel zmiany dostał Twoje dane.');
-      // Удаляем предыдущие сообщения
-      if (sess.messagesToDelete) {
-        for (const messageId of sess.messagesToDelete) {
-          await bot.deleteMessage(chatId, messageId).catch(() => {});
-        }
-      }
-      // Возвращаем начальное меню
-      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
-      delete session[chatId];
-    }
-  } catch (err) {
-    console.error('Ошибка обработки сообщения:', err);
-    await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie.');
-  }
-});
-
-// Уведомление подписчиков
-async function notifySubscribers(strefa, date, time) {
-  try {
-    const rows = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = ?`, [strefa]);
-    for (let i = 0; i < rows.length; i++) {
-      setTimeout(async () => {
-        try {
-          await bot.sendMessage(
-            rows[i].user_id,
-            `Nowa zmiana w Twojej strefie ${strefa}:\n${date} ${time}`
-          );
-        } catch (err) {
-          console.error(`Ошибка отправки уведомления пользователю ${rows[i].user_id}:`, err);
-        }
-      }, i * 100); // Задержка 100 мс между сообщениями
-    }
-  } catch (err) {
-    console.error('Ошибка при получении подписчиков:', err);
-  }
-}
-
-// Парсинг даты
-function parseDate(text) {
-  const today = new Date();
-  const tomorrow = new Date(Date.now() + 86400000);
-  if (text.toLowerCase().includes('dzi')) {
-    return today.toISOString().split('T')[0];
-  } else if (text.toLowerCase().includes('jutro')) {
-    return tomorrow.toISOString().split('T')[0];
-  } else {
-    const match = text.match(/(\d{1,2})[.\-/](\d{1,2})/);
-    if (!match) return null;
-    const [_, d, m] = match;
-    const year = today.getFullYear();
-    const date = new Date(`${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
-    if (isNaN(date.getTime())) return null;
-    return date.toISOString().split('T')[0];
-  }
-}
-
-// Парсинг времени
-function parseTime(text) {
-  const match = text.match(/^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/);
-  if (!match) return null;
-  return `${match[1]}–${match[2]}`;
-}
-
-// Защита от спама
-function checkRateLimit(chatId) {
-  const now = Date.now();
-  if (lastCommand[chatId] && now - lastCommand[chatId] < 500) {
-    return false;
-  }
-  lastCommand[chatId] = now;
-  return true;
-}
-
-// Веб-сервер
-app.get('/', (_, res) => res.send('Działa.'));
-app.listen(PORT, () => console.log(`Serwer działa na porcie ${PORT}`));
+      session[chatId] = { mode

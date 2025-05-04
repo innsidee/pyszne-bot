@@ -154,9 +154,14 @@ async function sendErr(chatId, sess, message) {
 async function notifySubscribers(strefa, date, time, username) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = ?`, [strefa]);
-    for (const sub of subscribers) {
+    for (let i = 0; i < subscribers.length; i++) {
+      const sub = subscribers[i];
       if (sub.user_id !== username) { // Nie powiadamiaj osoby oddającej zmianę
-        await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
+        setTimeout(() => {
+          bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`).catch((err) => {
+            console.error(`Błąd wysyłania powiadomienia do ${sub.user_id}:`, err);
+          });
+        }, i * 100); // Задержка 100 мс между сообщениями
       }
     }
   } catch (error) {
@@ -229,7 +234,7 @@ bot.onText(/Oddaj zmianę/, async (msg) => {
 bot.on('message', async (msg) => {
   const text = msg.text?.trim();
   const chatId = msg.chat.id;
-  const username = msg.from.username;
+  const username = msg.from.username || msg.from.first_name || 'Użytkownik'; // Добавляем запасной вариант
 
   if (!await checkLastCommand(chatId)) return;
   if (text?.startsWith('/')) return;
@@ -255,26 +260,33 @@ bot.on('message', async (msg) => {
       updateLastCommand(chatId);
       session[chatId] = { mode: 'view', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
       const message = await bot.sendMessage(chatId, 'Wybierz strefę:', zonesKeyboard);
-      session[msg.chatId].messagesToDelete.push(message.message_id);
+      session[chatId].messagesToDelete.push(message.message_id);
       return;
     }
 
     // Выбор зоны для просмотра смен
     if (sess.mode === 'view' && STREFY.includes(text)) {
       console.log(`Выбор зоны ${text} в режиме просмотра для ${chatId}`);
-      const rows = await db.all(`SELECT id, username, date, time FROM shifts WHERE strefa = ? ORDER BY created_at DESC`, [text]);
-      if (!rows.length) {
-        const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian w tej strefie.');
-        sess.messagesToDelete.push(msg2.message_id);
-      } else {
-        for (const row of rows) {
-          const msg3 = await bot.sendMessage(
-            chatId,
-            `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${row.username}\nChcesz przejąć tę zmianę?`,
-            { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.username}` }]] } }
-          );
-          sess.messagesToDelete.push(msg3.message_id);
+      try {
+        const rows = await db.all(`SELECT id, username, date, time FROM shifts WHERE strefa = ? ORDER BY created_at DESC`, [text]);
+        console.log(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
+        if (!rows.length) {
+          const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian w tej strefie.');
+          sess.messagesToDelete.push(msg2.message_id);
+        } else {
+          for (const row of rows) {
+            const displayUsername = row.username || 'Użytkownik'; // Запасной вариант, если username отсутствует
+            const msg3 = await bot.sendMessage(
+              chatId,
+              `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
+              { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${displayUsername}` }]] } }
+            );
+            sess.messagesToDelete.push(msg3.message_id);
+          }
         }
+      } catch (err) {
+        console.error(`Błąd podczas pobierania zmian dla strefы ${text}:`, err);
+        throw err; // Пробрасываем ошибку, чтобы внешний catch её обработал
       }
       return; // Nie czyścimy sesji, aby użytkownik mógł zobaczyć inne strefы
     }
@@ -304,6 +316,7 @@ bot.on('message', async (msg) => {
         try {
           await db.run(`INSERT INTO shifts (username, date, time, strefa) VALUES (?, ?, ?, ?)`,
             [username, sess.date, sess.time, sess.strefa]);
+          console.log(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}`);
           await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`);
           await notifySubscribers(sess.strefa, sess.date, sess.time, username);
         } catch (error) {

@@ -75,7 +75,8 @@ const lastCommand = {};
 // Команда /start
 bot.onText(/\/start/, async (msg) => {
   try {
-    await sendMessageWithRateLimit(msg.chat.id, 'Cześć! Co chcesz zrobić?', {
+    // Команды не попадают под rate limiting
+    await bot.sendMessage(msg.chat.id, 'Cześć! Co chcesz zrobić?', {
       reply_markup: {
         keyboard: [['Oddaj zmianę', 'Zobacz zmiany'], ['Subskrybuj strefę']],
         resize_keyboard: true,
@@ -90,7 +91,7 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/cancel/, async (msg) => {
   try {
     delete session[msg.chat.id];
-    await sendMessageWithRateLimit(msg.chat.id, 'Operacja anulowana.');
+    await bot.sendMessage(msg.chat.id, 'Operacja anulowana.');
   } catch (err) {
     console.error('Ошибка команды /cancel:', err);
   }
@@ -99,7 +100,12 @@ bot.onText(/\/cancel/, async (msg) => {
 // Подписка на зону
 bot.onText(/Subskrybuj strefę/, async (msg) => {
   try {
-    await sendMessageWithRateLimit(msg.chat.id, 'Wybierz strefę:', {
+    if (!checkRateLimit(msg.chat.id)) {
+      console.log(`Rate limit: Пользователь ${msg.chat.id} отправил "Subskrybuj strefę" слишком быстро`);
+      await bot.sendMessage(msg.chat.id, 'Zbyt szybko! Poczekaj chwilę.');
+      return;
+    }
+    await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
       reply_markup: {
         inline_keyboard: STREFY.map((s) => [{ text: s, callback_data: `sub_${s}` }]),
       },
@@ -137,8 +143,13 @@ bot.on('callback_query', async (query) => {
 // Oddanie смены
 bot.onText(/Oddaj zmianę/, async (msg) => {
   try {
+    if (!checkRateLimit(msg.chat.id)) {
+      console.log(`Rate limit: Пользователь ${msg.chat.id} отправил "Oddaj zmianę" слишком быстро`);
+      await bot.sendMessage(msg.chat.id, 'Zbyt szybko! Poczekaj chwilę.');
+      return;
+    }
     session[msg.chat.id] = {};
-    await sendMessageWithRateLimit(msg.chat.id, 'Wybierz strefę:', {
+    await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
       reply_markup: {
         keyboard: STREFY.map((s) => [s]),
         resize_keyboard: true,
@@ -158,18 +169,16 @@ bot.on('message', async (msg) => {
   // Пропуск команд
   if (text.startsWith('/')) return;
 
-  // Проверка на спам
-  if (!checkRateLimit(chatId)) {
-    await bot.sendMessage(chatId, 'Zbyt szybko! Poczekaj chwilę.');
-    return;
-  }
-
   try {
     const sess = session[chatId];
-    if (!sess) return;
+    if (!sess) {
+      console.log(`Сессия для пользователя ${chatId} не найдена`);
+      return;
+    }
 
     // Выбор зоны для отдачи смены
     if (!sess.strefa && STREFY.includes(text)) {
+      // Ответы на кнопки не должны попадать под rate limiting
       sess.strefa = text;
       await bot.sendMessage(chatId, 'Kiedy? (np. dzisiaj, jutro, albo 05.05)');
       return;
@@ -207,7 +216,12 @@ bot.on('message', async (msg) => {
 
     // Просмотр смен
     if (text.includes('Zobacz zmiany')) {
-      await sendMessageWithRateLimit(msg.chat.id, 'Wybierz strefę:', {
+      if (!checkRateLimit(chatId)) {
+        console.log(`Rate limit: Пользователь ${chatId} отправил "Zobacz zmiany" слишком быстро`);
+        await bot.sendMessage(chatId, 'Zbyt szybko! Poczekaj chwilę.');
+        return;
+      }
+      await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
         reply_markup: {
           keyboard: STREFY.map((s) => [s]),
           resize_keyboard: true,
@@ -316,20 +330,11 @@ function parseTime(text) {
 // Защита от спама
 function checkRateLimit(chatId) {
   const now = Date.now();
-  if (lastCommand[chatId] && now - lastCommand[chatId] < 1000) {
+  if (lastCommand[chatId] && now - lastCommand[chatId] < 500) { // Уменьшено до 500 мс
     return false;
   }
   lastCommand[chatId] = now;
   return true;
-}
-
-// Отправка сообщений с учетом лимитов
-async function sendMessageWithRateLimit(chatId, text, options) {
-  if (!checkRateLimit(chatId)) {
-    await bot.sendMessage(chatId, 'Zbyt szybko! Poczekaj chwilę.');
-    return;
-  }
-  await bot.sendMessage(chatId, text, options);
 }
 
 // Веб-сервер

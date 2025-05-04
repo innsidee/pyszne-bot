@@ -185,7 +185,7 @@ bot.onText(/\/cancel/, async (msg) => {
   await bot.sendMessage(msg.chat.id, 'Operacja anulowana.', mainKeyboard);
 });
 
-// Подписка на зону
+// Подписка na zону
 bot.onText(/Subskrybuj strefę/, async (msg) => {
   updateLastCommand(msg.chat.id);
   session[msg.chat.id] = { mode: 'subskrypcja', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
@@ -248,7 +248,7 @@ bot.on('message', async (msg) => {
   if (!sess.userMessages) sess.userMessages = [];
   sess.userMessages.push(msg.message_id);
 
-  console.log(`Получено сообщение от ${chatId} (@${username}): "${text}", режим: ${sess?.mode || 'нет'}`);
+  console.log(`Polucheno soobschenie ot ${chatId} (@${username}): "${text}", rezhim: ${sess?.mode || 'net'}`);
 
   try {
     if (text === 'Powrót') {
@@ -265,9 +265,9 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // Выбор зоны для просмотра смен
+    // Wybor zony dla prosmootra smen
     if (sess.mode === 'view' && STREFY.includes(text)) {
-      console.log(`Выбор зоны ${text} в режиме просмотра для ${chatId}`);
+      console.log(`Wybór strefy ${text} w trybie widoku dla ${chatId}`);
       try {
         const rows = await db.all(`SELECT id, username, date, time FROM shifts WHERE strefa = ? ORDER BY created_at DESC`, [text]);
         console.log(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
@@ -276,7 +276,7 @@ bot.on('message', async (msg) => {
           sess.messagesToDelete.push(msg2.message_id);
         } else {
           for (const row of rows) {
-            const displayUsername = row.username || 'Użytkownik'; // Запасной вариант, если username отсутствует
+            const displayUsername = row.username || 'Użytkownik'; // Zapasowy wariant, jeśli username отсутствует
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
@@ -286,13 +286,13 @@ bot.on('message', async (msg) => {
           }
         }
       } catch (err) {
-        console.error(`Błąd podczas pobierania zmian dla strefы ${text}:`, err);
-        throw err; // Пробрасываем ошибку, чтобы внешний catch её обработал
+        console.error(`Błąd podczas pobierania zmian dla strefy ${text}:`, err);
+        throw err; // Pobrasywaem oshibku, chtoby wneshnij catch ją obrobotat
       }
-      return; // Nie czyścimy sesji, aby użytkownik mógł zobaczyć inne strefы
+      return; // Nie czyścimy sesji, aby użytkownik mógł zobaczyć inne strefy
     }
 
-    // Отдача смены
+    // Oddacha smeny
     if (sess.mode === 'oddaj') {
       if (!sess.strefa && STREFY.includes(text)) {
         sess.strefa = text;
@@ -330,21 +330,40 @@ bot.on('message', async (msg) => {
       }
     }
 
-    // Передача смены
+    // Peredacha smeny
     if (sess.mode === 'take') {
       const [imie, nazwisko, idk] = text.split(/\s+/);
       if (!imie || !nazwisko || !idk || isNaN(idk)) return await sendErr(chatId, sess, 'Błąd formatu. Podaj imię, nazwisko i ID kuriera, oddzielone spacjami (np. Jan Kowalski 12345).');
 
       try {
+        console.log(`Próba przejęcia zmiany: shiftId=${sess.shiftId}, giver=${sess.giver}`);
         const shift = await db.get(`SELECT username, date, time, strefa FROM shifts WHERE id = ?`, [sess.shiftId]);
-        if (shift) {
+        if (!shift) {
+          await bot.sendMessage(chatId, 'Ta zmiana już nie jest dostępna.');
+          return;
+        }
+
+        // Sprawdzenie, czy giver istnieje i jest poprawny
+        if (!sess.giver || typeof sess.giver !== 'string') {
+          console.error(`Nieprawidłowy giver: ${sess.giver}`);
+          await bot.sendMessage(chatId, 'Błąd: Nie można skontaktować się z osobą oddającą zmianę.');
+          return;
+        }
+
+        // Próba wysłania wiadomości do giver
+        try {
           await bot.sendMessage(sess.giver,
             `@${username} (${imie} ${nazwisko}, ID: ${idk}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}, Strefa: ${shift.strefa}\nSkontaktuj się z nim, aby ustalić szczegóły.`);
-          await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${sess.giver}. Skontaktuj się z nim w celu ustalenia szczegółów.`);
-          await db.run(`DELETE FROM shifts WHERE id = ?`, [sess.shiftId]);
-        } else {
-          await bot.sendMessage(chatId, 'Ta zmiana już nie jest dostępna.');
+          console.log(`Wiadomość wysłana do ${sess.giver}`);
+        } catch (error) {
+          console.error(`Błąd wysyłania wiadomości do ${sess.giver}:`, error.message);
+          await bot.sendMessage(chatId, `Nie udało się powiadomić @${sess.giver}. Skontaktuj się z nim ręcznie.`);
         }
+
+        // Wysłanie potwierdzenia do użytkownika
+        await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${sess.giver}. Skontaktuj się z nim w celu ustalenia szczegółów.`);
+        await db.run(`DELETE FROM shifts WHERE id = ?`, [sess.shiftId]);
+        console.log(`Zmiana o ID ${sess.shiftId} usunięta z bazy danych`);
       } catch (error) {
         console.error('Błąd podczas przekazywania zmiany:', error);
         await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany.');
@@ -360,7 +379,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-// Таймер для очистки сессий
+// Таймер dla очистки sesji
 setInterval(() => {
   const now = Date.now();
   for (const chatId in session) {
@@ -369,7 +388,7 @@ setInterval(() => {
       delete lastCommand[chatId];
     }
   }
-}, 5 * 60 * 1000); // Проверка каждые 5 минут
+}, 5 * 60 * 1000); // Prikazka kadżyje 5 minut
 
 // Antyzasypiacz (ping co 4 minuty)
 setInterval(() => {
@@ -382,7 +401,8 @@ setInterval(() => {
     });
   }
 }, 240000); // 4 minuty
-// Веб-сервер
+
+// Web-serwer
 app.get('/', (_, res) => res.send('Bot is running'));
 app.listen(PORT, () => {
   console.log(`Bot is listening on port ${PORT}`);

@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 const sqlite3 = require('sqlite3').verbose();
 const util = require('util');
 const moment = require('moment');
-moment.locale('pl'); // Установка локали для польского языка
+moment.locale('pl'); // Ustawienie lokalizacji dla języka polskiego
 
 dotenv.config();
 const token = process.env.TELEGRAM_TOKEN;
@@ -27,12 +27,12 @@ const db = new sqlite3.Database('shifts.db', (err) => {
 });
 db.run = util.promisify(db.run);
 db.all = util.promisify(db.all);
-db.get = util.promisify(db.get); // Добавлено для получения одной записи
+db.get = util.promisify(db.get); // Dodano dla pobierania jednej pozycji
 
 const STREFY = ['Centrum', 'Ursus', 'Bemowo/Bielany', 'Białołęka/Tarchomin', 'Praga', 'Rembertów', 'Wawer', 'Służew', 'Ursynów', 'Wilanów', 'Marki', 'Legionowo', 'Łomianki'];
 const session = {};
-const SESSION_TIMEOUT = 60 * 60 * 1000; // 1 час
-const LAST_COMMAND_TIMEOUT = 5 * 60 * 1000; // 5 минут
+const SESSION_TIMEOUT = 60 * 60 * 1000; // 1 godzina
+const LAST_COMMAND_TIMEOUT = 5 * 60 * 1000; // 5 minut
 const lastCommand = {};
 
 const mainKeyboard = {
@@ -63,8 +63,9 @@ async function initializeDatabase() {
   await db.run(`
     CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER UNIQUE NOT NULL,
-      strefa TEXT NOT NULL
+      user_id INTEGER NOT NULL,
+      strefa TEXT NOT NULL,
+      UNIQUE (user_id, strefa)
     )
   `);
   console.log('Baza danych zainicjalizowana pomyślnie');
@@ -86,10 +87,14 @@ process.on('SIGINT', () => {
 function clearSession(chatId) {
   const sess = session[chatId];
   if (sess?.messagesToDelete) {
-    sess.messagesToDelete.forEach(id => bot.deleteMessage(chatId, id).catch(() => {}));
+    for (const id of sess.messagesToDelete) {
+      await bot.deleteMessage(chatId, id).catch(() => {});
+    }
   }
   if (sess?.userMessages) {
-    sess.userMessages.forEach(id => bot.deleteMessage(chatId, id).catch(() => {}));
+    for (const id of sess.userMessages) {
+      await bot.deleteMessage(chatId, id).catch(() => {});
+    }
   }
   delete session[chatId];
 }
@@ -119,7 +124,6 @@ function parseDate(text) {
 
   const parsed = moment(text, ['DD.MM', 'DD.MM.YYYY'], true);
   if (parsed.isValid()) {
-    const year = parsed.year() === moment().year() ? moment().year() : parsed.year();
     return parsed.format('DD.MM.YYYY');
   }
   return null;
@@ -151,7 +155,7 @@ async function notifySubscribers(strefa, date, time, username) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = ?`, [strefa]);
     for (const sub of subscribers) {
-      if (sub.user_id !== username) { // Не уведомлять того, кто отдает смену
+      if (sub.user_id !== username) { // Nie powiadamiaj osoby oddającej zmianę
         await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
       }
     }
@@ -160,23 +164,11 @@ async function notifySubscribers(strefa, date, time, username) {
   }
 }
 
-// Middleware для проверки активности пользователя
-bot.use(async (msg, next) => {
-  const chatId = msg.chat.id;
-  updateLastCommand(chatId);
-  if (session[chatId] && Date.now() - Object.keys(session).find(key => session[key] === session[chatId]) > SESSION_TIMEOUT) {
-    await bot.sendMessage(chatId, 'Twoja sesja wygasła. Uruchom /start ponownie.');
-    clearSession(chatId);
-    delete lastCommand[chatId];
-    return;
-  }
-  next();
-});
-
 // Команда /start
 bot.onText(/\/start/, async (msg) => {
   clearSession(msg.chat.id);
   updateLastCommand(msg.chat.id);
+  session[msg.chat.id] = { lastActive: Date.now() }; // Инициализация времени последней активности
   await bot.sendMessage(msg.chat.id, 'Cześć! Co chcesz zrobić?', mainKeyboard);
 });
 
@@ -190,18 +182,20 @@ bot.onText(/\/cancel/, async (msg) => {
 // Подписка на зону
 bot.onText(/Subskrybuj strefę/, async (msg) => {
   updateLastCommand(msg.chat.id);
+  session[msg.chat.id] = { mode: 'subskrypcja', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
   const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
     reply_markup: {
       inline_keyboard: STREFY.map(s => [{ text: s, callback_data: `sub_${s}` }]),
     },
   });
-  session[msg.chat.id] = { mode: 'subskrypcja', messagesToDelete: [message.message_id], userMessages: [] };
+  session[msg.chat.id].messagesToDelete.push(message.message_id);
 });
 
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
   updateLastCommand(chatId);
+  session[chatId] = { ...session[chatId], lastActive: Date.now() };
 
   if (data.startsWith('sub_')) {
     const strefa = data.slice(4);
@@ -210,14 +204,14 @@ bot.on('callback_query', async (query) => {
       await bot.sendMessage(chatId, `Zapisano subskrypcję na: ${strefa}`, mainKeyboard);
     } catch (error) {
       console.error('Błąd podczas zapisu subskrypcji:', error);
-      await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania subskrypcji.');
+      await bot.sendMessage(chatId, 'Już subskrybujesz tę strefę lub wystąpił inny błąd.');
     } finally {
       clearSession(chatId);
     }
     await bot.answerCallbackQuery(query.id);
   } else if (data.startsWith('take_')) {
     const [_, shiftId, giver] = data.split('_');
-    session[chatId] = { mode: 'take', shiftId: parseInt(shiftId), giver, messagesToDelete: [], userMessages: [] };
+    session[chatId] = { mode: 'take', shiftId: parseInt(shiftId), giver, messagesToDelete: [], userMessages: [], lastActive: Date.now() };
     const message = await bot.sendMessage(chatId, 'Podaj swoje imię, nazwisko i ID kuriera (np. Jan Kowalski 12345)');
     session[chatId].messagesToDelete.push(message.message_id);
     await bot.answerCallbackQuery(query.id);
@@ -227,7 +221,7 @@ bot.on('callback_query', async (query) => {
 // Начало отдачи смены
 bot.onText(/Oddaj zmianę/, async (msg) => {
   updateLastCommand(msg.chat.id);
-  session[msg.chat.id] = { mode: 'oddaj', messagesToDelete: [], userMessages: [] };
+  session[msg.chat.id] = { mode: 'oddaj', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
   const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
   session[msg.chat.id].messagesToDelete.push(message.message_id);
 });
@@ -239,6 +233,8 @@ bot.on('message', async (msg) => {
 
   if (!await checkLastCommand(chatId)) return;
   if (text?.startsWith('/')) return;
+
+  session[chatId] = { ...session[chatId], lastActive: Date.now() }; // Обновление времени активности
 
   const sess = session[chatId];
   if (!sess) return;
@@ -257,8 +253,9 @@ bot.on('message', async (msg) => {
     // Просмотр смен
     if (text.toLowerCase().includes('zobaczyć zmiany')) {
       updateLastCommand(chatId);
+      session[chatId] = { mode: 'view', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
       const message = await bot.sendMessage(chatId, 'Wybierz strefę:', zonesKeyboard);
-      session[chatId] = { mode: 'view', messagesToDelete: [message.message_id], userMessages: [] };
+      session[chatId].messagesToDelete.push(message.message_id);
       return;
     }
 
@@ -279,7 +276,7 @@ bot.on('message', async (msg) => {
           sess.messagesToDelete.push(msg3.message_id);
         }
       }
-      return; // Не очищаем сессию, чтобы пользователь мог посмотреть другие зоны
+      return; // Nie czyścimy sesji, aby użytkownik mógł zobaczyć inne strefy
     }
 
     // Отдача смены
@@ -337,3 +334,4 @@ bot.on('message', async (msg) => {
       } catch (error) {
         console.error('Błąd podczas przekazywania zmiany:', error);
         await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany.');
+      } finally {

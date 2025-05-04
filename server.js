@@ -156,7 +156,7 @@ bot.on('message', async (msg) => {
     }
 
     // Просмотр смен
-    if (text.toLowerCase().includes('zobacz')) {
+    if (text.toLowerCase().includes('Zobacz zmiany')) {
       const msg = await bot.sendMessage(chatId, 'Wybierz strefę:', zonesKeyboard);
       session[chatId] = { mode: 'view', messagesToDelete: [msg.message_id], userMessages: [] };
       return;

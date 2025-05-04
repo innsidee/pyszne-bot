@@ -72,16 +72,26 @@ const STREFY = [
 const session = {};
 const lastCommand = {};
 
+// Начальная клавиатура
+const mainKeyboard = {
+  reply_markup: {
+    keyboard: [['Oddaj zmianę', 'Zobacz zmiany'], ['Subskrybuj strefę']],
+    resize_keyboard: true,
+  },
+};
+
+// Клавиатура с зонами (добавим кнопку "Powrót")
+const zonesKeyboard = {
+  reply_markup: {
+    keyboard: [...STREFY.map((s) => [s]), ['Powrót']],
+    resize_keyboard: true,
+  },
+};
+
 // Команда /start
 bot.onText(/\/start/, async (msg) => {
   try {
-    // Команды не попадают под rate limiting
-    await bot.sendMessage(msg.chat.id, 'Cześć! Co chcesz zrobić?', {
-      reply_markup: {
-        keyboard: [['Oddaj zmianę', 'Zobacz zmiany'], ['Subskrybuj strefę']],
-        resize_keyboard: true,
-      },
-    });
+    await bot.sendMessage(msg.chat.id, 'Cześć! Co chcesz zrobić?', mainKeyboard);
   } catch (err) {
     console.error('Ошибка команды /start:', err);
   }
@@ -91,7 +101,7 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/cancel/, async (msg) => {
   try {
     delete session[msg.chat.id];
-    await bot.sendMessage(msg.chat.id, 'Operacja anulowana.');
+    await bot.sendMessage(msg.chat.id, 'Operacja anulowana.', mainKeyboard);
   } catch (err) {
     console.error('Ошибка команды /cancel:', err);
   }
@@ -105,11 +115,12 @@ bot.onText(/Subskrybuj strefę/, async (msg) => {
       await bot.sendMessage(msg.chat.id, 'Zbyt szybko! Poczekaj chwilę.');
       return;
     }
-    await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
+    const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
       reply_markup: {
         inline_keyboard: STREFY.map((s) => [{ text: s, callback_data: `sub_${s}` }]),
       },
     });
+    session[msg.chat.id] = { messagesToDelete: [message.message_id] };
   } catch (err) {
     console.error('Ошибка команды Subskrybuj strefę:', err);
   }
@@ -124,15 +135,23 @@ bot.on('callback_query', async (query) => {
     if (data.startsWith('sub_')) {
       const strefa = data.slice(4);
       await db.run(`INSERT INTO subscriptions (user_id, strefa) VALUES (?, ?)`, [chatId, strefa]);
-      await bot.sendMessage(chatId, `Zapisano subskrypcję na: ${strefa}`);
+      await bot.sendMessage(chatId, `Zapisano subskrypcję na: ${strefa}`, mainKeyboard);
+      // Удаляем сообщение с выбором зоны
+      if (session[chatId]?.messagesToDelete) {
+        for (const messageId of session[chatId].messagesToDelete) {
+          await bot.deleteMessage(chatId, messageId).catch(() => {});
+        }
+        delete session[chatId];
+      }
     } else if (data.startsWith('koord_')) {
       const takerId = data.split('_')[1];
       await bot.sendMessage(takerId, 'Właściciel zmiany napisał do koordynatora!');
       await bot.answerCallbackQuery(query.id, { text: 'Dzięki!' });
     } else if (data.startsWith('take_')) {
       const [_, id, giver] = data.split('_');
-      session[chatId] = { mode: 'take', shiftId: id, giver };
-      await bot.sendMessage(chatId, 'Podaj swoje imię, nazwisko i ID kuriera (np. Jan Kowalski 12345)');
+      session[chatId] = { mode: 'take', shiftId: id, giver, messagesToDelete: [] };
+      const message = await bot.sendMessage(chatId, 'Podaj swoje imię, nazwisko i ID kuriera (np. Jan Kowalski 12345)');
+      session[chatId].messagesToDelete.push(message.message_id);
     }
   } catch (err) {
     console.error('Ошибка обработки callback_query:', err);
@@ -148,13 +167,9 @@ bot.onText(/Oddaj zmianę/, async (msg) => {
       await bot.sendMessage(msg.chat.id, 'Zbyt szybko! Poczekaj chwilę.');
       return;
     }
-    session[msg.chat.id] = {};
-    await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
-      reply_markup: {
-        keyboard: STREFY.map((s) => [s]),
-        resize_keyboard: true,
-      },
-    });
+    session[msg.chat.id] = { messagesToDelete: [] };
+    const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
+    session[msg.chat.id].messagesToDelete.push(message.message_id);
   } catch (err) {
     console.error('Ошибка команды Oddaj zmianę:', err);
   }
@@ -176,11 +191,24 @@ bot.on('message', async (msg) => {
       return;
     }
 
+    // Обработка кнопки "Powrót"
+    if (text === 'Powrót') {
+      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
+      // Удаляем предыдущие сообщения
+      if (sess.messagesToDelete) {
+        for (const messageId of sess.messagesToDelete) {
+          await bot.deleteMessage(chatId, messageId).catch(() => {});
+        }
+      }
+      delete session[chatId];
+      return;
+    }
+
     // Выбор зоны для отдачи смены
     if (!sess.strefa && STREFY.includes(text)) {
-      // Ответы на кнопки не должны попадать под rate limiting
       sess.strefa = text;
-      await bot.sendMessage(chatId, 'Kiedy? (np. dzisiaj, jutro, albo 05.05)');
+      const message = await bot.sendMessage(chatId, 'Kiedy? (np. dzisiaj, jutro, albo 05.05)');
+      sess.messagesToDelete.push(message.message_id);
       return;
     }
 
@@ -188,11 +216,13 @@ bot.on('message', async (msg) => {
     if (sess.strefa && !sess.date) {
       const date = parseDate(text);
       if (!date) {
-        await bot.sendMessage(chatId, 'Zły format daty. Napisz np. 05.05');
+        const message = await bot.sendMessage(chatId, 'Zły format daty. Napisz np. 05.05');
+        sess.messagesToDelete.push(message.message_id);
         return;
       }
       sess.date = date;
-      await bot.sendMessage(chatId, 'O jakich godzinach? (np. 11:00-19:00)');
+      const message = await bot.sendMessage(chatId, 'O jakich godzinach? (np. 11:00-19:00)');
+      sess.messagesToDelete.push(message.message_id);
       return;
     }
 
@@ -200,7 +230,8 @@ bot.on('message', async (msg) => {
     if (sess.date && !sess.time) {
       const time = parseTime(text);
       if (!time) {
-        await bot.sendMessage(chatId, 'Zły format godzin. Napisz np. 11:00-19:00');
+        const message = await bot.sendMessage(chatId, 'Zły format godzin. Napisz np. 11:00-19:00');
+        sess.messagesToDelete.push(message.message_id);
         return;
       }
       sess.time = time;
@@ -210,24 +241,29 @@ bot.on('message', async (msg) => {
       );
       await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`);
       await notifySubscribers(sess.strefa, sess.date, sess.time);
+
+      // Удаляем предыдущие сообщения
+      if (sess.messagesToDelete) {
+        for (const messageId of sess.messagesToDelete) {
+          await bot.deleteMessage(chatId, messageId).catch(() => {});
+        }
+      }
+
+      // Возвращаем начальное меню
+      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
       delete session[chatId];
       return;
     }
 
     // Просмотр смен
-    if (text.includes('Zobacz zmiany')) {
+    if (text === 'Zobacz zmiany') { // Упрощаем проверку
       if (!checkRateLimit(chatId)) {
         console.log(`Rate limit: Пользователь ${chatId} отправил "Zobacz zmiany" слишком быстро`);
         await bot.sendMessage(chatId, 'Zbyt szybko! Poczekaj chwilę.');
         return;
       }
-      await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', {
-        reply_markup: {
-          keyboard: STREFY.map((s) => [s]),
-          resize_keyboard: true,
-        },
-      });
-      session[chatId] = { mode: 'view' };
+      const message = await bot.sendMessage(msg.chat.id, 'Wybierz strefę:', zonesKeyboard);
+      session[chatId] = { mode: 'view', messagesToDelete: [message.message_id] };
       return;
     }
 
@@ -235,10 +271,11 @@ bot.on('message', async (msg) => {
     if (sess.mode === 'view' && STREFY.includes(text)) {
       const rows = await db.all(`SELECT rowid, username, date, time FROM shifts WHERE strefa = ?`, [text]);
       if (!rows.length) {
-        await bot.sendMessage(chatId, 'Brak zmian.');
+        const message = await bot.sendMessage(chatId, 'Brak zmian.');
+        sess.messagesToDelete.push(message.message_id);
       } else {
         for (const row of rows) {
-          await bot.sendMessage(
+          const message = await bot.sendMessage(
             chatId,
             `${row.rowid}: ${row.date} ${row.time}\nNapisał: @${row.username}\nChcesz przejąć tę zmianę?`,
             {
@@ -249,6 +286,15 @@ bot.on('message', async (msg) => {
               },
             }
           );
+          sess.messagesToDelete.push(message.message_id);
+        }
+      }
+      // Возвращаем начальное меню после просмотра
+      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
+      // Удаляем предыдущие сообщения
+      if (sess.messagesToDelete) {
+        for (const messageId of sess.messagesToDelete) {
+          await bot.deleteMessage(chatId, messageId).catch(() => {});
         }
       }
       delete session[chatId];
@@ -259,7 +305,8 @@ bot.on('message', async (msg) => {
     if (sess.mode === 'take') {
       const [imie, nazwisko, idk] = text.trim().split(/\s+/);
       if (!imie || !nazwisko || !idk || isNaN(idk)) {
-        await bot.sendMessage(chatId, 'Błąd formatu. Podaj np. Jan Kowalski 12345');
+        const message = await bot.sendMessage(chatId, 'Błąd formatu. Podaj np. Jan Kowalski 12345');
+        sess.messagesToDelete.push(message.message_id);
         return;
       }
       await bot.sendMessage(
@@ -272,6 +319,14 @@ bot.on('message', async (msg) => {
         }
       );
       await bot.sendMessage(chatId, 'Dziękuję, właściciel zmiany dostał Twoje dane.');
+      // Удаляем предыдущие сообщения
+      if (sess.messagesToDelete) {
+        for (const messageId of sess.messagesToDelete) {
+          await bot.deleteMessage(chatId, messageId).catch(() => {});
+        }
+      }
+      // Возвращаем начальное меню
+      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
       delete session[chatId];
     }
   } catch (err) {
@@ -330,7 +385,7 @@ function parseTime(text) {
 // Защита от спама
 function checkRateLimit(chatId) {
   const now = Date.now();
-  if (lastCommand[chatId] && now - lastCommand[chatId] < 500) { // Уменьшено до 500 мс
+  if (lastCommand[chatId] && now - lastCommand[chatId] < 500) {
     return false;
   }
   lastCommand[chatId] = now;

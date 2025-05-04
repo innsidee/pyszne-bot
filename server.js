@@ -371,8 +371,6 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000); // Проверка каждые 5 минут
 
- });
-
 // Antyzasypiacz (ping co 4 minuty)
 setInterval(() => {
   const url = process.env.RENDER_EXTERNAL_URL;

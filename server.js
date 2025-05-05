@@ -17,7 +17,7 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 const logger = winston.createLogger({
   level: 'info',
@@ -54,6 +54,7 @@ const REMINDER_INTERVAL_HOURS = 3;
 const lastCommand = {};
 const lastReminderTimes = new Map();
 
+const ADMIN_CHAT_ID = '@oginside66'; // Twój ID jako admina
 const mainKeyboard = {
   reply_markup: {
     keyboard: [
@@ -85,7 +86,7 @@ async function initializeDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL,
       chat_id INTEGER NOT NULL,
-      date TEXT NOT NOT NULL,
+      date TEXT NOT NULL,
       time TEXT NOT NULL,
       strefa TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -291,6 +292,31 @@ async function updateStats(userId, field, increment = 1) {
   }
 }
 
+async function sendBroadcast(chatId, message) {
+  try {
+    const users = new Set();
+    const tables = ['shifts', 'subscriptions', 'stats', 'shift_confirmations'];
+    for (const table of tables) {
+      const rows = await db.all(`SELECT DISTINCT user_id AS chat_id FROM ${table} WHERE user_id IS NOT NULL`);
+      rows.forEach(row => users.add(row.chat_id));
+    }
+
+    for (const userId of users) {
+      try {
+        await bot.sendMessage(userId, message);
+        logger.info(`Wysłano broadcast do ${userId}: ${message}`);
+      } catch (err) {
+        logger.error(`Błąd wysyłania broadcast do ${userId}: ${err.message}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 100)); // Opóźnienie 100ms między wiadomościami
+    }
+    await bot.sendMessage(chatId, 'Wiadomość została rozesłana do wszystkich użytkowników.', mainKeyboard);
+  } catch (error) {
+    logger.error(`Błąd podczas wysyłania broadcast: ${error.message}`);
+    await bot.sendMessage(chatId, 'Wystąpił błąd podczas rozsyłania wiadomości.', mainKeyboard);
+  }
+}
+
 // Komenda /start
 bot.onText(/\/start/, async (msg) => {
   clearSession(msg.chat.id);
@@ -306,6 +332,23 @@ bot.onText(/\/cancel/, async (msg) => {
   delete lastCommand[msg.chat.id];
   await bot.sendMessage(msg.chat.id, 'Operacja anulowana.', mainKeyboard);
   logger.info(`Użytkownik ${msg.chat.id} (@${msg.from.username || 'brak'}) anulował operację`);
+});
+
+// Komenda /broadcast (tylko dla @oginside66)
+bot.onText(/\/broadcast/, async (msg) => {
+  const chatId = msg.chat.id;
+  const username = msg.from.username;
+  if (username !== ADMIN_CHAT_ID.replace('@', '')) {
+    await bot.sendMessage(chatId, 'Nie masz uprawnień do tej komendy.', mainKeyboard);
+    logger.info(`Nieautoryzowana próba użycia /broadcast przez ${chatId} (@${username})`);
+    return;
+  }
+
+  updateLastCommand(chatId);
+  session[chatId] = { mode: 'broadcast', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
+  const message = await bot.sendMessage(chatId, 'Wpisz treść wiadomości, którą chcesz rozesłać:', returnKeyboard);
+  session[chatId].messagesToDelete.push(message.message_id);
+  logger.info(`Użytkownik ${chatId} (@${username}) rozpoczął broadcast`);
 });
 
 // Przycisk Subskrypcje
@@ -696,6 +739,17 @@ bot.on('message', async (msg) => {
         await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany.', mainKeyboard);
       } finally {
         clearSession(chatId);
+      }
+      return;
+    }
+
+    if (sess.mode === 'broadcast') {
+      try {
+        await sendBroadcast(chatId, text);
+        clearSession(chatId);
+      } catch (error) {
+        logger.error(`Błąd podczas wysyłania broadcast: ${error.message}`);
+        await bot.sendMessage(chatId, 'Wystąpił błąd podczas rozsyłania wiadomości.', mainKeyboard);
       }
       return;
     }

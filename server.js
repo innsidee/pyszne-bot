@@ -50,7 +50,10 @@ const STREFY = ['Centrum', 'Ursus', 'Bemowo/Bielany', 'Białołęka/Tarchomin', 
 const session = {};
 const SESSION_TIMEOUT = 60 * 60 * 1000; // 1 godzina
 const LAST_COMMAND_TIMEOUT = 5 * 60 * 1000; // 5 minut
+const SHIFT_EXPIRY_HOURS = 24; // Limit czasu na przejęcie zmiany (24 godziny)
+const REMINDER_INTERVAL_HOURS = 3; // Przypomnienia co 3 godziny
 const lastCommand = {};
+const lastReminderTimes = new Map(); // Śledzenie czasu ostatniego przypomnienia dla każdej zmiany
 
 const mainKeyboard = {
   reply_markup: {
@@ -211,6 +214,57 @@ async function notifySubscribers(strefa, date, time, username) {
     }
   } catch (error) {
     logger.error('Błąd podczas powiadamiania subskrybentów:', error.message);
+  }
+}
+
+async function sendReminder(shift) {
+  const shiftId = shift.id;
+  try {
+    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = ?`, [shift.strefa]);
+    for (let i = 0; i < subscribers.length; i++) {
+      const sub = subscribers[i];
+      if (sub.user_id !== shift.chat_id) {
+        setTimeout(async () => {
+          try {
+            await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
+            logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
+          } catch (err) {
+            logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
+          }
+        }, i * 100);
+      }
+    }
+    lastReminderTimes.set(shiftId, moment()); // Aktualizujemy czas ostatniego przypomnienia
+  } catch (error) {
+    logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
+  }
+}
+
+async function cleanExpiredShifts() {
+  try {
+    const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa, created_at FROM shifts`);
+    const now = moment();
+    for (const shift of shifts) {
+      const createdAt = moment(shift.created_at);
+      const hoursSinceCreation = now.diff(createdAt, 'hours', true);
+
+      // Usuwanie zmiany po 24 godzinach
+      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS) {
+        await db.run(`DELETE FROM shifts WHERE id = ?`, [shift.id]);
+        logger.info(`Usunięto zmianę ID ${shift.id} - wygasła po ${SHIFT_EXPIRY_HOURS} godzinach`);
+        lastReminderTimes.delete(shift.id); // Usuwamy przypomnienie z listy
+        continue;
+      }
+
+      // Wysyłanie przypomnień co 3 godziny
+      const lastReminder = lastReminderTimes.get(shift.id) || createdAt;
+      const hoursSinceLastReminder = now.diff(lastReminder, 'hours', true);
+      if (hoursSinceLastReminder >= REMINDER_INTERVAL_HOURS) {
+        await sendReminder(shift);
+      }
+    }
+  } catch (error) {
+    logger.error(`Błąd podczas czyszczenia wygasłych zmian: ${error.message}`);
   }
 }
 
@@ -499,6 +553,7 @@ bot.on('message', async (msg) => {
 
         await db.run(`DELETE FROM shifts WHERE id = ?`, [sess.shiftId]);
         logger.info(`Zmiana o ID ${sess.shiftId} usunięta z bazy danych`);
+        lastReminderTimes.delete(parseInt(sess.shiftId)); // Usuwamy przypomnienie z listy
       } catch (error) {
         logger.error(`Błąd podczas przekazywania zmiany dla ${chatId}: ${error.message}`);
         await bot.sendMessage(chatId, 'Wystąpił błąd podczas próby przekazania zmiany.', mainKeyboard);
@@ -514,7 +569,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-// Таймер dla очистки sesji
+// Таймер dla очистки sesji i wygasłych zmian
 setInterval(() => {
   const now = Date.now();
   for (const chatId in session) {
@@ -524,6 +579,7 @@ setInterval(() => {
       logger.info(`Sesja dla ${chatId} wyczyszczona z powodu timeoutu`);
     }
   }
+  cleanExpiredShifts();
 }, 5 * 60 * 1000);
 
 // Antyzasypiacz (ping co 4 minuty)

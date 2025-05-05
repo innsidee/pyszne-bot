@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg'); // Zastępujemy sqlite3 na pg
 const util = require('util');
 const moment = require('moment');
 const winston = require('winston');
@@ -33,17 +33,52 @@ const logger = winston.createLogger({
   ],
 });
 
-const db = new sqlite3.Database('shifts.db', (err) => {
-  if (err) {
-    logger.error('Błąd DB:', err);
-    process.exit(1);
-  } else {
-    logger.info('Baza danych shifts.db podłączona pomyślnie');
-  }
+// Inicjalizacja PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // Wymagane na Render.com
+  },
 });
-db.run = util.promisify(db.run);
-db.all = util.promisify(db.all);
-db.get = util.promisify(db.get);
+
+pool.on('connect', () => {
+  logger.info('Połączono z bazą danych PostgreSQL');
+});
+
+pool.on('error', (err) => {
+  logger.error('Błąd połączenia z bazą danych PostgreSQL:', err.message);
+  process.exit(1);
+});
+
+// Funkcje promisify dla PostgreSQL
+const db = {
+  run: async (query, params = []) => {
+    const client = await pool.connect();
+    try {
+      await client.query(query, params);
+    } finally {
+      client.release();
+    }
+  },
+  get: async (query, params = []) => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query(query, params);
+      return res.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  },
+  all: async (query, params = []) => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query(query, params);
+      return res.rows;
+    } finally {
+      client.release();
+    }
+  },
+};
 
 const STREFY = ['Centrum', 'Ursus', 'Bemowo/Bielany', 'Białołęka/Tarchomin', 'Praga', 'Rembertów', 'Wawer', 'Służew', 'Ursynów', 'Wilanów', 'Marki', 'Legionowo', 'Łomianki'];
 const session = {};
@@ -80,58 +115,53 @@ const returnKeyboard = {
 };
 
 async function initializeDatabase() {
-  logger.info('Inicjalizacja bazy danych...');
+  logger.info('Inicjalizacja bazy danych PostgreSQL...');
   await db.run(`
     CREATE TABLE IF NOT EXISTS shifts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       username TEXT NOT NULL,
-      chat_id INTEGER NOT NULL,
+      chat_id BIGINT NOT NULL,
       date TEXT NOT NULL,
       time TEXT NOT NULL,
       strefa TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
   await db.run(`
     CREATE TABLE IF NOT EXISTS subscriptions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
       strefa TEXT NOT NULL,
-      UNIQUE (user_id, strefa)
+      CONSTRAINT unique_user_strefa UNIQUE (user_id, strefa)
     )
   `);
   await db.run(`
     CREATE TABLE IF NOT EXISTS shift_confirmations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       shift_id INTEGER NOT NULL,
-      giver_chat_id INTEGER NOT NULL,
-      taker_chat_id INTEGER NOT NULL,
+      giver_chat_id BIGINT NOT NULL,
+      taker_chat_id BIGINT NOT NULL,
       taker_username TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
   await db.run(`
     CREATE TABLE IF NOT EXISTS stats (
-      user_id INTEGER PRIMARY KEY,
+      user_id BIGINT PRIMARY KEY,
       shifts_given INTEGER DEFAULT 0,
       shifts_taken INTEGER DEFAULT 0,
       subscriptions INTEGER DEFAULT 0
     )
   `);
-  logger.info('Baza danych zainicjalizowana pomyślnie');
+  logger.info('Baza danych PostgreSQL zainicjalizowana pomyślnie');
 }
 initializeDatabase();
 
-process.on('SIGINT', () => {
-  logger.info('Zamykanie bazy danych...');
-  db.close((err) => {
-    if (err) {
-      logger.error('Błąd podczas zamykania bazy danych:', err);
-    } else {
-      logger.info('Baza danych zamknięta.');
-    }
-    process.exit(0);
-  });
+process.on('SIGINT', async () => {
+  logger.info('Zamykanie połączenia z bazą danych...');
+  await pool.end();
+  logger.info('Połączenie z bazą danych zamknięte.');
+  process.exit(0);
 });
 
 async function clearSession(chatId) {
@@ -208,7 +238,7 @@ async function sendErr(chatId, sess, message) {
 
 async function notifySubscribers(strefa, date, time, username) {
   try {
-    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = ?`, [strefa]);
+    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [strefa]);
     for (let i = 0; i < subscribers.length; i++) {
       const sub = subscribers[i];
       if (sub.user_id !== username) {
@@ -230,7 +260,7 @@ async function notifySubscribers(strefa, date, time, username) {
 async function sendReminder(shift) {
   const shiftId = shift.id;
   try {
-    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = ?`, [shift.strefa]);
+    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
     for (let i = 0; i < subscribers.length; i++) {
       const sub = subscribers[i];
       if (sub.user_id !== shift.chat_id) {
@@ -259,7 +289,7 @@ async function cleanExpiredShifts() {
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
 
       if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS) {
-        await db.run(`DELETE FROM shifts WHERE id = ?`, [shift.id]);
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła po ${SHIFT_EXPIRY_HOURS} godzinach`);
         lastReminderTimes.delete(shift.id);
         continue;
@@ -279,11 +309,11 @@ async function cleanExpiredShifts() {
 async function updateStats(userId, field, increment = 1) {
   try {
     await db.run(
-      `INSERT OR IGNORE INTO stats (user_id, shifts_given, shifts_taken, subscriptions) VALUES (?, 0, 0, 0)`,
+      `INSERT INTO stats (user_id, shifts_given, shifts_taken, subscriptions) VALUES ($1, 0, 0, 0) ON CONFLICT (user_id) DO NOTHING`,
       [userId]
     );
     await db.run(
-      `UPDATE stats SET ${field} = ${field} + ? WHERE user_id = ?`,
+      `UPDATE stats SET ${field} = ${field} + $1 WHERE user_id = $2`,
       [increment, userId]
     );
     logger.info(`Zaktualizowano statystyki dla user_id ${userId}: ${field} + ${increment}`);
@@ -358,7 +388,7 @@ bot.onText(/Subskrypcje/, async (msg) => {
   logger.info(`Użytkownik ${chatId} (@${msg.from.username || 'brak'}) wywołał Subskrypcje`);
 
   try {
-    const subscriptions = await db.all(`SELECT strefa FROM subscriptions WHERE user_id = ?`, [chatId]);
+    const subscriptions = await db.all(`SELECT strefa FROM subscriptions WHERE user_id = $1`, [chatId]);
     if (!subscriptions.length) {
       await bot.sendMessage(chatId, 'Nie subskrybujesz żadnych stref.', mainKeyboard);
       logger.info(`Użytkownik ${chatId} nie ma subskrypcji`);
@@ -385,7 +415,7 @@ bot.onText(/Usuń moją zmianę/, async (msg) => {
   logger.info(`Użytkownik ${chatId} (@${msg.from.username || 'brak'}) wywołał Usuń moją zmianę`);
 
   try {
-    const shifts = await db.all(`SELECT id, date, time, strefa FROM shifts WHERE chat_id = ? ORDER BY created_at DESC`, [chatId]);
+    const shifts = await db.all(`SELECT id, date, time, strefa FROM shifts WHERE chat_id = $1 ORDER BY created_at DESC`, [chatId]);
     if (!shifts.length) {
       await bot.sendMessage(chatId, 'Nie masz żadnych zmian do usunięcia.', mainKeyboard);
       logger.info(`Użytkownik ${chatId} nie ma zmian do usunięcia`);
@@ -412,7 +442,7 @@ bot.onText(/Moje statystyki/, async (msg) => {
   logger.info(`Użytkownik ${chatId} (@${msg.from.username || 'brak'}) wywołał Moje statystyki`);
 
   try {
-    const stats = await db.get(`SELECT shifts_given, shifts_taken, subscriptions FROM stats WHERE user_id = ?`, [chatId]);
+    const stats = await db.get(`SELECT shifts_given, shifts_taken, subscriptions FROM stats WHERE user_id = $1`, [chatId]);
     if (!stats) {
       await bot.sendMessage(chatId, 'Brak statystyk. Zacznij korzystać z bota, aby zbierać dane!', mainKeyboard);
       logger.info(`Brak statystyk dla użytkownika ${chatId}`);
@@ -497,7 +527,7 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('sub_')) {
     const strefa = data.slice(4);
     try {
-      await db.run(`INSERT OR IGNORE INTO subscriptions (user_id, strefa) VALUES (?, ?)`, [chatId, strefa]);
+      await db.run(`INSERT INTO subscriptions (user_id, strefa) VALUES ($1, $2) ON CONFLICT (user_id, strefa) DO NOTHING`, [chatId, strefa]);
       await updateStats(chatId, 'subscriptions', 1);
       await bot.sendMessage(chatId, `Zapisano subskrypcję na: ${strefa}`, mainKeyboard);
       logger.info(`Użytkownik ${chatId} zasubskrybował strefę: ${strefa}`);
@@ -511,7 +541,7 @@ bot.on('callback_query', async (query) => {
   } else if (data.startsWith('unsub_')) {
     const strefa = data.slice(6);
     try {
-      await db.run(`DELETE FROM subscriptions WHERE user_id = ? AND strefa = ?`, [chatId, strefa]);
+      await db.run(`DELETE FROM subscriptions WHERE user_id = $1 AND strefa = $2`, [chatId, strefa]);
       await updateStats(chatId, 'subscriptions', -1);
       await bot.sendMessage(chatId, `Odsubskrybowano strefę: ${strefa}`, mainKeyboard);
       logger.info(`Użytkownik ${chatId} odsubskrybował strefę: ${strefa}`);
@@ -536,7 +566,7 @@ bot.on('callback_query', async (query) => {
       await updateStats(takerChatId, 'shifts_taken', 1);
       logger.info(`Użytkownik ${chatId} potwierdził powiadomienie koordynatora dla zmiany ${shiftId}, powiadomiono ${takerChatId}`);
 
-      await db.run(`DELETE FROM shift_confirmations WHERE shift_id = ? AND giver_chat_id = ? AND taker_chat_id = ?`, [shiftId, chatId, takerChatId]);
+      await db.run(`DELETE FROM shift_confirmations WHERE shift_id = $1 AND giver_chat_id = $2 AND taker_chat_id = $3`, [shiftId, chatId, takerChatId]);
     } catch (error) {
       logger.error(`Błąd podczas potwierdzania powiadomienia koordynatora dla ${chatId}: ${error.message}`);
       await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie lub skontaktuj się z koordynatorem ręcznie.', mainKeyboard);
@@ -545,14 +575,14 @@ bot.on('callback_query', async (query) => {
   } else if (data.startsWith('delete_shift_')) {
     const shiftId = data.slice(13);
     try {
-      const shift = await db.get(`SELECT date, time, strefa FROM shifts WHERE id = ? AND chat_id = ?`, [shiftId, chatId]);
+      const shift = await db.get(`SELECT date, time, strefa FROM shifts WHERE id = $1 AND chat_id = $2`, [shiftId, chatId]);
       if (!shift) {
         await bot.sendMessage(chatId, 'Nie znaleziono tej zmiany lub nie należy do Ciebie.', mainKeyboard);
         logger.info(`Próba usunięcia nieistniejącej zmiany ${shiftId} przez ${chatId}`);
         return;
       }
 
-      await db.run(`DELETE FROM shifts WHERE id = ?`, [shiftId]);
+      await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
       await updateStats(chatId, 'shifts_given', -1);
       await bot.sendMessage(chatId, `Usunięto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
       logger.info(`Użytkownik ${chatId} usunął zmianę ID ${shiftId}`);
@@ -610,7 +640,7 @@ bot.on('message', async (msg) => {
     if (sess.mode === 'view' && STREFY.includes(text)) {
       logger.info(`Wybór strefy ${text} w trybie widoku dla ${chatId}`);
       try {
-        const rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = ? ORDER BY created_at DESC`, [text]);
+        const rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [text]);
         logger.info(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
         if (!rows.length) {
           const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian w tej strefie.', zonesKeyboard);
@@ -660,7 +690,7 @@ bot.on('message', async (msg) => {
         sess.time = time;
 
         const existingShift = await db.get(
-          `SELECT id FROM shifts WHERE username = ? AND date = ? AND time = ? AND strefa = ?`,
+          `SELECT id FROM shifts WHERE username = $1 AND date = $2 AND time = $3 AND strefa = $4`,
           [username, sess.date, sess.time, sess.strefa]
         );
         if (existingShift) {
@@ -672,7 +702,7 @@ bot.on('message', async (msg) => {
         }
 
         try {
-          await db.run(`INSERT INTO shifts (username, chat_id, date, time, strefa) VALUES (?, ?, ?, ?, ?)`,
+          await db.run(`INSERT INTO shifts (username, chat_id, date, time, strefa) VALUES ($1, $2, $3, $4, $5)`,
             [username, chatId, sess.date, sess.time, sess.strefa]);
           await updateStats(chatId, 'shifts_given', 1);
           logger.info(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}, chatId: ${chatId}`);
@@ -694,7 +724,7 @@ bot.on('message', async (msg) => {
 
       try {
         logger.info(`Próba przejęcia zmiany: shiftId=${sess.shiftId}, giverChatId=${sess.giverChatId}`);
-        const shift = await db.get(`SELECT username, chat_id, date, time, strefa FROM shifts WHERE id = ?`, [sess.shiftId]);
+        const shift = await db.get(`SELECT username, chat_id, date, time, strefa FROM shifts WHERE id = $1`, [sess.shiftId]);
         if (!shift) {
           await bot.sendMessage(chatId, 'Ta zmiana już nie jest dostępna.', mainKeyboard);
           logger.info(`Zmiana ID ${sess.shiftId} niedostępna dla ${chatId}`);
@@ -720,7 +750,7 @@ bot.on('message', async (msg) => {
             { reply_markup: { inline_keyboard: [[{ text: 'Powiadomiłem koordynatora ✅', callback_data: `confirm_${sess.shiftId}_${chatId}_${username}` }]] } }
           );
 
-          await db.run(`INSERT INTO shift_confirmations (shift_id, giver_chat_id, taker_chat_id, taker_username) VALUES (?, ?, ?, ?)`,
+          await db.run(`INSERT INTO shift_confirmations (shift_id, giver_chat_id, taker_chat_id, taker_username) VALUES ($1, $2, $3, $4)`,
             [sess.shiftId, shift.chat_id, chatId, username]);
         } catch (error) {
           logger.error(`Błąd wysyłania wiadomości do chatId ${shift.chat_id} (@${shift.username}): ${error.message}`);
@@ -731,7 +761,7 @@ bot.on('message', async (msg) => {
           await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${shift.username}. Skontaktuj się z nim w celu ustalenia szczegółów.`, mainKeyboard);
         }
 
-        await db.run(`DELETE FROM shifts WHERE id = ?`, [sess.shiftId]);
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [sess.shiftId]);
         logger.info(`Zmiana o ID ${sess.shiftId} usunięta z bazy danych`);
         lastReminderTimes.delete(parseInt(sess.shiftId));
       } catch (error) {

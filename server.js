@@ -167,16 +167,22 @@ function parseTime(text) {
   const match = text.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
   if (match) {
     const [_, startHour, startMinute, endHour, endMinute] = match;
+    const startTotalMinutes = parseInt(startHour) * 60 + parseInt(startMinute);
+    const endTotalMinutes = parseInt(endHour) * 60 + parseInt(endMinute);
+
+    // Walidacja godzin i minut
     if (
       parseInt(startHour) >= 0 && parseInt(startHour) <= 23 &&
       parseInt(startMinute) >= 0 && parseInt(startMinute) <= 59 &&
       parseInt(endHour) >= 0 && parseInt(endHour) <= 23 &&
-      parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59 &&
-      `${startHour}:${startMinute}` < `${endHour}:${endMinute}`
+      parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59
     ) {
-      return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
-    }
-  }
+      // Sprawdzenie, czy czas zakończenia jest poprawny (uwzględnia przejście przez północ)
+      if (endTotalMinutes >= startTotalMinutes || (endTotalMinutes < startTotalMinutes && endTotalMinutes === 0)) {
+        return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
+      
+      }
+      
   return null;
 }
 

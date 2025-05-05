@@ -177,12 +177,13 @@ function parseTime(text) {
       parseInt(endHour) >= 0 && parseInt(endHour) <= 23 &&
       parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59
     ) {
-      // Sprawdzenie, czy czas zakończenia jest poprawny (uwzględnia przejście przez północ)
-      if (endTotalMinutes >= startTotalMinutes || (endTotalMinutes < startTotalMinutes && endTotalMinutes === 0)) {
+      // Sprawdzenie, czy czas zakończenia jest poprawny
+      // Jeśli endTotalMinutes < startTotalMinutes, zakładamy przejście przez północ (np. 20:00-01:00)
+      if (endTotalMinutes >= startTotalMinutes || endTotalMinutes < startTotalMinutes) {
         return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
       }
-      }
-      }
+    }
+  }
   return null;
 }
 

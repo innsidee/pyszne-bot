@@ -180,9 +180,9 @@ function parseTime(text) {
       // Sprawdzenie, czy czas zakończenia jest poprawny (uwzględnia przejście przez północ)
       if (endTotalMinutes >= startTotalMinutes || (endTotalMinutes < startTotalMinutes && endTotalMinutes === 0)) {
         return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
-      
       }
-      
+      }
+      }
   return null;
 }
 

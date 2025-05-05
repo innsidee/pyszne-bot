@@ -56,7 +56,12 @@ const lastReminderTimes = new Map();
 
 const mainKeyboard = {
   reply_markup: {
-    keyboard: [['Oddaj zmianę', 'Zobaczyć zmiany'], ['Subskrybuj strefę', 'Moje statystyki'], ['Instrukcja']],
+    keyboard: [
+      ['Oddaj zmianę', 'Zobaczyć zmiany'],
+      ['Subskrybuj strefę', 'Subskrypcje'],
+      ['Moje statystyki', 'Usuń moją zmianę'],
+      ['Instrukcja']
+    ],
     resize_keyboard: true,
   },
 };
@@ -80,7 +85,7 @@ async function initializeDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL,
       chat_id INTEGER NOT NULL,
-      date TEXT NOT NULL,
+      date TEXT NOT NOT NULL,
       time TEXT NOT NULL,
       strefa TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -303,11 +308,11 @@ bot.onText(/\/cancel/, async (msg) => {
   logger.info(`Użytkownik ${msg.chat.id} (@${msg.from.username || 'brak'}) anulował operację`);
 });
 
-// Komenda /subskrypcje
-bot.onText(/\/subskrypcje/, async (msg) => {
+// Przycisk Subskrypcje
+bot.onText(/Subskrypcje/, async (msg) => {
   const chatId = msg.chat.id;
   updateLastCommand(chatId);
-  logger.info(`Użytkownik ${chatId} (@${msg.from.username || 'brak'}) wywołał /subskrypcje`);
+  logger.info(`Użytkownik ${chatId} (@${msg.from.username || 'brak'}) wywołał Subskrypcje`);
 
   try {
     const subscriptions = await db.all(`SELECT strefa FROM subscriptions WHERE user_id = ?`, [chatId]);
@@ -330,7 +335,34 @@ bot.onText(/\/subskrypcje/, async (msg) => {
   }
 });
 
-// Komenda Moje statystyki
+// Przycisk Usuń moją zmianę
+bot.onText(/Usuń moją zmianę/, async (msg) => {
+  const chatId = msg.chat.id;
+  updateLastCommand(chatId);
+  logger.info(`Użytkownik ${chatId} (@${msg.from.username || 'brak'}) wywołał Usuń moją zmianę`);
+
+  try {
+    const shifts = await db.all(`SELECT id, date, time, strefa FROM shifts WHERE chat_id = ? ORDER BY created_at DESC`, [chatId]);
+    if (!shifts.length) {
+      await bot.sendMessage(chatId, 'Nie masz żadnych zmian do usunięcia.', mainKeyboard);
+      logger.info(`Użytkownik ${chatId} nie ma zmian do usunięcia`);
+      return;
+    }
+
+    const inlineKeyboard = shifts.map(shift => [
+      { text: `${shift.date}, ${shift.time}, ${shift.strefa}`, callback_data: `delete_shift_${shift.id}` },
+    ]);
+    await bot.sendMessage(chatId, 'Wybierz zmianę do usunięcia:', {
+      reply_markup: { inline_keyboard: inlineKeyboard },
+    });
+    logger.info(`Wysłano listę zmian do usunięcia użytkownikowi ${chatId}`);
+  } catch (error) {
+    logger.error(`Błąd podczas pobierania zmian do usunięcia dla ${chatId}: ${error.message}`);
+    await bot.sendMessage(chatId, 'Wystąpił błąd podczas pobierania zmian.', mainKeyboard);
+  }
+});
+
+// Przycisk Moje statystyki
 bot.onText(/Moje statystyki/, async (msg) => {
   const chatId = msg.chat.id;
   updateLastCommand(chatId);
@@ -356,7 +388,7 @@ bot.onText(/Moje statystyki/, async (msg) => {
   }
 });
 
-// Komenda Instrukcja
+// Przycisk Instrukcja
 bot.onText(/Instrukcja/, async (msg) => {
   const chatId = msg.chat.id;
   updateLastCommand(chatId);
@@ -375,14 +407,17 @@ Cześć! Ten bot pomaga w wygodnej wymianie zmian między kurierami. Oto, co pot
    - Przeglądaj dostępne zmiany w wybranej strefie.
    - Kliknij „Przejmuję zmianę”, podaj swoje dane (imię, nazwisko, ID kuriera), a bot powiadomi osobę oddającą.
 
-3. **Subskrybuj strefę** 🔔
-   - Subskrybuj strefy, aby otrzymywać powiadomienia o nowych zmianach.
-   - Możesz zarządzać subskrypcjami przez komendę /subskrypcje.
+3. **Usuń moją zmianę** 🗑️
+   - Usuń jedną ze swoich zmian, jeśli zmieniłeś zdanie.
 
-4. **Moje statystyki** 📊
+4. **Subskrybuj strefę** 🔔
+   - Subskrybuj strefy, aby otrzymywać powiadomienia o nowych zmianach.
+   - Zarządzaj subskrypcjami przez przycisk „Subskrypcje”.
+
+5. **Moje statystyki** 📊
    - Sprawdzaj, ile zmian oddałeś, przejąłeś i ile masz aktywnych subskrypcji.
 
-5. **Anulowanie** 🚫
+6. **Anulowanie** 🚫
    - Użyj /cancel, aby przerwać bieżącą operację i wrócić do menu.
 
 💡 **Wskazówki**:
@@ -462,6 +497,25 @@ bot.on('callback_query', async (query) => {
     } catch (error) {
       logger.error(`Błąd podczas potwierdzania powiadomienia koordynatora dla ${chatId}: ${error.message}`);
       await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie lub skontaktuj się z koordynatorem ręcznie.', mainKeyboard);
+    }
+    await bot.answerCallbackQuery(query.id);
+  } else if (data.startsWith('delete_shift_')) {
+    const shiftId = data.slice(13);
+    try {
+      const shift = await db.get(`SELECT date, time, strefa FROM shifts WHERE id = ? AND chat_id = ?`, [shiftId, chatId]);
+      if (!shift) {
+        await bot.sendMessage(chatId, 'Nie znaleziono tej zmiany lub nie należy do Ciebie.', mainKeyboard);
+        logger.info(`Próba usunięcia nieistniejącej zmiany ${shiftId} przez ${chatId}`);
+        return;
+      }
+
+      await db.run(`DELETE FROM shifts WHERE id = ?`, [shiftId]);
+      await updateStats(chatId, 'shifts_given', -1);
+      await bot.sendMessage(chatId, `Usunięto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
+      logger.info(`Użytkownik ${chatId} usunął zmianę ID ${shiftId}`);
+    } catch (error) {
+      logger.error(`Błąd podczas usuwania zmiany ${shiftId} dla ${chatId}: ${error.message}`);
+      await bot.sendMessage(chatId, 'Wystąpił błąd podczas usuwania zmiany.', mainKeyboard);
     }
     await bot.answerCallbackQuery(query.id);
   }

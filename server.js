@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
-const { Pool } = require('pg'); // Zastępujemy sqlite3 na pg
+const { Pool } = require('pg');
 const util = require('util');
 const moment = require('moment');
 const winston = require('winston');
@@ -37,7 +37,7 @@ const logger = winston.createLogger({
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false, // Wymagane na Render.com
+    rejectUnauthorized: false,
   },
 });
 
@@ -89,7 +89,7 @@ const REMINDER_INTERVAL_HOURS = 3;
 const lastCommand = {};
 const lastReminderTimes = new Map();
 
-const ADMIN_CHAT_ID = '@oginside66'; // Twój ID jako admina
+const ADMIN_CHAT_ID = '@oginside66';
 const mainKeyboard = {
   reply_markup: {
     keyboard: [
@@ -204,6 +204,9 @@ function parseDate(text) {
 
   const parsed = moment(text, ['DD.MM', 'DD.MM.YYYY'], true);
   if (parsed.isValid()) {
+    if (parsed.isBefore(today)) {
+      return null; // Data jest przeszła, zwracamy null
+    }
     return parsed.format('DD.MM.YYYY');
   }
   return null;
@@ -236,12 +239,12 @@ async function sendErr(chatId, sess, message) {
   logger.info(`Wysłano błąd do ${chatId}: ${message}`);
 }
 
-async function notifySubscribers(strefa, date, time, username) {
+async function notifySubscribers(strefa, date, time, username, chatId) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [strefa]);
     for (let i = 0; i < subscribers.length; i++) {
       const sub = subscribers[i];
-      if (sub.user_id !== username) {
+      if (sub.user_id !== chatId) {
         setTimeout(async () => {
           try {
             await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
@@ -338,7 +341,7 @@ async function sendBroadcast(chatId, message) {
       } catch (err) {
         logger.error(`Błąd wysyłania broadcast do ${userId}: ${err.message}`);
       }
-      await new Promise(resolve => setTimeout(resolve, 100)); // Opóźnienie 100ms między wiadomościami
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
     await bot.sendMessage(chatId, 'Wiadomość została rozesłana do wszystkich użytkowników.', mainKeyboard);
   } catch (error) {
@@ -707,7 +710,7 @@ bot.on('message', async (msg) => {
           await updateStats(chatId, 'shifts_given', 1);
           logger.info(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}, chatId: ${chatId}`);
           await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`, mainKeyboard);
-          await notifySubscribers(sess.strefa, sess.date, sess.time, username);
+          await notifySubscribers(sess.strefa, sess.date, sess.time, username, chatId);
         } catch (error) {
           logger.error(`Błąd podczas zapisywania zmiany dla ${chatId}: ${error.message}`);
           await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania zmiany.', mainKeyboard);

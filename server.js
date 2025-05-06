@@ -499,7 +499,7 @@ Cześć! Ten bot pomaga w wygodnej wymianie zmian między kurierami. Oto, co pot
 💡 **Wskazówki**:
 - Upewnij się, że podajesz poprawne dane (np. format daty: 05.05.2025, godziny: 11:00-19:00).
 - Po przejęciu zmiany skontaktuj się z osobą oddającą, aby potwierdzić szczegóły.
-- W razie problemów z botem napisz do @oginside66.
+- W razie problemów z botem napisz do @asiaolejnik.
 
 Masz pytania, problemy lub pomysły na nowe funkcje? Pisz do @asiaolejnik! 🚀`;
   

@@ -501,7 +501,7 @@ Cześć! Ten bot pomaga w wygodnej wymianie zmian między kurierami. Oto, co pot
 - Po przejęciu zmiany skontaktuj się z osobą oddającą, aby potwierdzić szczegóły.
 - W razie problemów z botem napisz do @oginside66.
 
-Masz pytania, problemy lub pomysły na nowe funkcje? Pisz do @oginside66! 🚀`;
+Masz pytania, problemy lub pomysły na nowe funkcje? Pisz do @asiaolejnik! 🚀`;
   
   await bot.sendMessage(chatId, instruction, mainKeyboard);
   logger.info(`Wysłano instrukcję użytkownikowi ${chatId}`);

@@ -13,7 +13,6 @@ if (!token) {
   console.error('TELEGRAM_TOKEN nie ustawiony w .env');
   process.exit(1);
 }
-
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) {
   console.error('DATABASE_URL nie ustawiony w .env');
@@ -38,7 +37,6 @@ const logger = winston.createLogger({
   ],
 });
 
-// Inicjalizacja PostgreSQL
 const pool = new Pool({
   connectionString: dbUrl,
   ssl: {
@@ -55,7 +53,6 @@ pool.on('error', (err) => {
   setTimeout(() => pool.connect(), 5000);
 });
 
-// Funkcje promisify dla PostgreSQL
 const db = {
   run: async (query, params = []) => {
     const client = await pool.connect();
@@ -264,11 +261,10 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
       const sub = subscribers[i];
       if (sub.user_id !== chatId) {
         setTimeout(async () => {
-          try {
+          const shiftStart = moment(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+          if (shiftStart.isAfter(moment())) {
             await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
             logger.info(`Wysłano powiadomienie do ${sub.user_id}: Nowa zmiana w ${strefa}`);
-          } catch (err) {
-            logger.error(`Błąd wysyłania powiadomienia do ${sub.user_id}: ${err.message}`);
           }
         }, i * 100);
       }
@@ -280,24 +276,27 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
 
 async function sendReminder(shift) {
   const shiftId = shift.id;
-  try {
-    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
-    for (let i = 0; i < subscribers.length; i++) {
-      const sub = subscribers[i];
-      if (sub.user_id !== shift.chat_id) {
-        setTimeout(async () => {
-          try {
-            await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
-            logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
-          } catch (err) {
-            logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
-          }
-        }, i * 100);
+  const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+  if (shiftStart.isAfter(moment())) {
+    try {
+      const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
+      for (let i = 0; i < subscribers.length; i++) {
+        const sub = subscribers[i];
+        if (sub.user_id !== shift.chat_id) {
+          setTimeout(async () => {
+            try {
+              await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
+              logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
+            } catch (err) {
+              logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
+            }
+          }, i * 100);
+        }
       }
+      lastReminderTimes.set(shiftId, moment());
+    } catch (error) {
+      logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
     }
-    lastReminderTimes.set(shiftId, moment());
-  } catch (error) {
-    logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
   }
 }
 
@@ -308,14 +307,13 @@ async function cleanExpiredShifts() {
     for (const shift of shifts) {
       const createdAt = moment(shift.created_at);
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
-
-      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS) {
+      const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-        logger.info(`Usunięto zmianę ID ${shift.id} - wygasła po ${SHIFT_EXPIRY_HOURS} godzinach`);
+        logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
         lastReminderTimes.delete(shift.id);
         continue;
       }
-
       const lastReminder = lastReminderTimes.get(shift.id) || createdAt;
       const hoursSinceLastReminder = now.diff(lastReminder, 'hours', true);
       if (hoursSinceLastReminder >= REMINDER_INTERVAL_HOURS) {
@@ -373,7 +371,6 @@ async function sendBroadcast(chatId, message) {
   }
 }
 
-// Komenda /start
 bot.onText(/\/start/, async (msg) => {
   clearSession(msg.chat.id);
   updateLastCommand(msg.chat.id);
@@ -382,7 +379,6 @@ bot.onText(/\/start/, async (msg) => {
   logger.info(`Użytkownik ${msg.chat.id} (@${msg.from.username || 'brak'}) uruchomił /start`);
 });
 
-// Komenda /broadcast (pozostawiona jako tekstowa)
 bot.onText(/\/broadcast/, async (msg) => {
   const chatId = msg.chat.id;
   const username = msg.from.username;
@@ -413,7 +409,6 @@ async function saveUserProfile(chatId, firstName, lastName, courierId) {
   logger.info(`Zapisano profil dla ${chatId}: ${firstName} ${lastName}, ID: ${courierId}`);
 }
 
-// Obsługa przycisków i wiadomości
 bot.on('message', async (msg) => {
   const text = msg.text?.trim();
   const chatId = msg.chat.id;
@@ -559,38 +554,7 @@ bot.on('message', async (msg) => {
       updateLastCommand(chatId);
       logger.info(`Użytkownik ${chatId} wywołał Instrukcję`);
 
-      const instruction = `📋 **Instrukcja obsługi bota Wymiana zmian Pyszne**
-
-Cześć! Ten bot pomaga w wygodnej wymianie zmian między kurierami. Oto, co potrafi:
-
-1. **Oddaj zmianę** 📅
-   - Wybierz strefę, datę i godziny zmiany, którą chcesz oddać.
-   - Zmiana pojawi się w wybranej strefie, a subskrybenci dostaną powiadomienie.
-   - Po 24 godzinach zmiana wygasa, jeśli nikt jej nie przejmie.
-
-2. **Zobaczyć zmiany** 🔍
-   - Przeglądaj dostępne zmiany w wybranej strefie.
-   - Kliknij „Przejmuję zmianę”, podaj swoje dane (imię, nazwisko, ID kuriera), a bot powiadomi osobę oddającą.
-
-3. **Usuń moją zmianę** 🗑️
-   - Usuń jedną ze swoich zmian, jeśli zmieniłeś zdanie.
-
-4. **Subskrybuj strefę** 🔔
-   - Subskrybuj strefy, aby otrzymywać powiadomienia o nowych zmianach.
-   - Zarządzaj subskrypcjami przez przycisk „Subskrypcje”.
-
-5. **Moje statystyki** 📊
-   - Sprawdzaj, ile zmian oddałeś, przejąłeś i ile masz aktywnych subskrypcji.
-
-6. **Anulowanie** 🚫
-   - Użyj /cancel, aby przerwać bieżącą operację i wrócić do menu.
-
-💡 **Wskazówki**:
-- Upewnij się, że podajesz poprawne dane (np. format daty: 05.05.2025, godziny: 11:00-19:00).
-- Po przejęciu zmiany skontaktuj się z osobą oddającą, aby potwierdzić szczegóły.
-- W razie problemów z botem napisz do @asiaolejnik.
-
-Masz pytania, problemy lub pomysły na nowe funkcje? Pisz do @asiaolejnik! 🚀`;
+      const instruction = `📋 **Instrukcja obsługi bota Wymiana zmian Pyszne**\nCześć! Ten bot pomaga w wygodnej wymianie zmian między kurierami. Oto, co potrafi:\n1. **Oddaj zmianę** 📅\n   - Wybierz strefę, datę i godziny zmiany, którą chcesz oddać.\n   - Zmiana pojawi się w wybranej strefie, a subskrybenci dostaną powiadomienie.\n   - Po 24 godzinach zmiana wygasa, jeśli nikt jej nie przejmie.\n2. **Zobaczyć zmiany** 🔍\n   - Przeglądaj dostępne zmiany w wybranej strefie.\n   - Kliknij „Przejmuję zmianę”, podaj swoje dane (imię, nazwisko, ID kuriera), a bot powiadomi osobę oddającą.\n3. **Usuń moją zmianę** 🗑️\n   - Usuń jedną ze swoich zmian, jeśli zmieniłeś zdanie.\n4. **Subskrybuj strefę** 🔔\n   - Subskrybuj strefy, aby otrzymywać powiadomienia o nowych zmianach.\n   - Zarządzaj subskrypcjami przez przycisk „Subskrypcje”.\n5. **Moje statystyki** 📊\n   - Sprawdzaj, ile zmian oddałeś, przejąłeś i ile masz aktywnych subskrypcji.\n6. **Anulowanie** 🚫\n   - Użyj /cancel, aby przerwać bieżącą operację i wrócić do menu.\n💡 **Wskazówki**:\n- Upewnij się, że podajesz poprawne dane (np. format daty: 05.05.2025, godziny: 11:00-19:00).\n- Po przejęciu zmiany skontaktuj się z osobą oddającą, aby potwierdzić szczegóły.\n- W razie problemów z botem napisz do @asiaolejnik.\nMasz pytania, problemy lub pomysły na nowe funkcje? Pisz do @asiaolejnik! 🚀`;
       await bot.sendMessage(chatId, instruction, mainKeyboard);
       logger.info(`Wysłano instrukcję użytkownikowi ${chatId}`);
       return;
@@ -607,14 +571,17 @@ Masz pytania, problemy lub pomysły na nowe funkcje? Pisz do @asiaolejnik! 🚀`
           logger.info(`Brak zmian w strefie ${text} dla ${chatId}`);
         } else {
           for (const row of rows) {
-            const displayUsername = row.username || 'Użytkownik';
-            const msg3 = await bot.sendMessage(
-              chatId,
-              `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
-              { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
-            );
-            sess.messagesToDelete.push(msg3.message_id);
-            logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
+            const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+            if (shiftStart.isAfter(moment())) {
+              const displayUsername = row.username || 'Użytkownik';
+              const msg3 = await bot.sendMessage(
+                chatId,
+                `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
+                { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
+              );
+              sess.messagesToDelete.push(msg3.message_id);
+              logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
+            }
           }
         }
       } catch (err) {
@@ -805,7 +772,7 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
     }
 
     if (!shift.chat_id || isNaN(shift.chat_id)) {
-      logger.error(`Nieprawidłowy chat_id osoby oddającej zmianę: ${shift.chat_id} dla zmiany ID ${shiftId}`);
+      logger.error(`Nieprawidłowy chat_id osoby oddającej zmianę: ${shift.chat_id}`);
       await bot.sendMessage(chatId, 'Błąd: Nie można skontaktować się z osobą oddającą zmianę. Skontaktuj się z nią ręcznie.', mainKeyboard);
       return;
     }
@@ -826,7 +793,7 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
         [shiftId, shift.chat_id, chatId, `${profile.first_name} ${profile.last_name}`]);
     } catch (error) {
       logger.error(`Błąd wysyłania wiadomości do chatId ${shift.chat_id} (@${shift.username}): ${error.message}`);
-      await bot.sendMessage(chatId, `Nie udało się powiadomić @${shift.username}. Skontaktuj się z nim ręcznie, aby ustalić szczegóły przejęcia zmiany. Może być konieczne rozpoczęcie rozmowy z botem przez @${shift.username} (np. wpisanie /start).`, mainKeyboard);
+      await bot.sendMessage(chatId, `Nie udało się powiadomić @${shift.username}. Skontaktuj się z nim ręcznie, aby ustalić szczegóły przejęcia zmiany.`, mainKeyboard);
     }
 
     if (notificationSent) {

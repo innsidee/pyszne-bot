@@ -348,7 +348,7 @@ async function sendBroadcast(chatId, message) {
     const users = new Set();
     const tables = ['shifts', 'subscriptions', 'stats', 'shift_confirmations'];
     for (const table of tables) {
-      const rows = await db.all(`SELECT DISTINCT user_id AS chat_id FROM ${table} WHERE user_id IS NOT NULL`);
+      const rows = await db.all(`SELECT DISTINCT chat_id FROM ${table} WHERE chat_id IS NOT NULL`);
       rows.forEach(row => users.add(row.chat_id));
     }
 
@@ -413,7 +413,7 @@ async function saveUserProfile(chatId, firstName, lastName, courierId) {
   logger.info(`Zapisano profil dla ${chatId}: ${firstName} ${lastName}, ID: ${courierId}`);
 }
 
-// Obsługa przycisków
+// Obsługa przycisków i wiadomości
 bot.on('message', async (msg) => {
   const text = msg.text?.trim();
   const chatId = msg.chat.id;
@@ -751,12 +751,13 @@ bot.on('callback_query', async (query) => {
     const profile = session[chatId]?.userProfile || await getUserProfile(chatId);
     if (!profile.first_name || !profile.last_name || !profile.courier_id) {
       await bot.sendMessage(chatId, 'Najpierw ustaw swój profil, klikając „Ustaw profil”.', returnKeyboard);
+      await bot.answerCallbackQuery(query.id);
       return;
     }
     session[chatId] = { mode: 'take', shiftId: parseInt(shiftId), giverChatId, messagesToDelete: [], userMessages: [], lastActive: Date.now(), userProfile: profile };
     logger.info(`Użytkownik ${chatId} chce przejąć zmianę o ID: ${shiftId} z profilem: ${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}`);
+    await handleTakeShift(chatId, shiftId, giverChatId, profile, query.from.username || 'Użytkownik');
     await bot.answerCallbackQuery(query.id);
-    await handleTakeShift(chatId, shiftId, giverChatId, profile);
   } else if (data.startsWith('confirm_')) {
     const [_, shiftId, takerChatId, takerUsername] = data.split('_');
     try {
@@ -794,7 +795,7 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-async function handleTakeShift(chatId, shiftId, giverChatId, profile) {
+async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsername) {
   try {
     const shift = await db.get(`SELECT username, chat_id, date, time, strefa FROM shifts WHERE id = $1`, [shiftId]);
     if (!shift) {
@@ -804,22 +805,21 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile) {
     }
 
     if (!shift.chat_id || isNaN(shift.chat_id)) {
-      logger.error(`Nieprawidłowy chat_id osoby oddającej zmianę: ${shift.chat_id}`);
-      await bot.sendMessage(chatId, 'Błąd: Nie można skontaktować się z osobą oddającą zmianę.', mainKeyboard);
+      logger.error(`Nieprawidłowy chat_id osoby oddającej zmianę: ${shift.chat_id} dla zmiany ID ${shiftId}`);
+      await bot.sendMessage(chatId, 'Błąd: Nie można skontaktować się z osobą oddającą zmianę. Skontaktuj się z nią ręcznie.', mainKeyboard);
       return;
     }
 
     let notificationSent = false;
-
     try {
       await bot.sendMessage(shift.chat_id,
-        `@${msg.from.username} (${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}, Strefa: ${shift.strefa}\nSkontaktuj się z nim, aby ustalić szczegóły.`);
+        `@${takerUsername} (${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}, Strefa: ${shift.strefa}\nSkontaktuj się z nim, aby ustalić szczegóły.`);
       logger.info(`Wiadomość wysłana do chatId ${shift.chat_id} (@${shift.username})`);
       notificationSent = true;
 
       await bot.sendMessage(shift.chat_id,
         `Musisz teraz powiadomić koordynatora, że oddajesz zmianę.`,
-        { reply_markup: { inline_keyboard: [[{ text: 'Powiadomiłem koordynatora ✅', callback_data: `confirm_${shiftId}_${chatId}_${msg.from.username}` }]] } }
+        { reply_markup: { inline_keyboard: [[{ text: 'Powiadomiłem koordynatora ✅', callback_data: `confirm_${shiftId}_${chatId}_${takerUsername}` }]] } }
       );
 
       await db.run(`INSERT INTO shift_confirmations (shift_id, giver_chat_id, taker_chat_id, taker_username) VALUES ($1, $2, $3, $4)`,

@@ -422,7 +422,7 @@ async function getUserProfile(chatId) {
   return profile || { first_name: null, last_name: null, courier_id: null };
 }
 
-async function saveUserProfile(chatId, firstName, lastName, courierId) {
+async function saveUserProfile(chatId, text) {
   const parts = text.split(/\s+/).filter(part => part);
   if (parts.length !== 3 || isNaN(parts[2])) {
     throw new Error('Błąd formatu. Podaj imię, nazwisko i ID kuriera, oddzielone spacjami (np. Jan Kowalski 12345).');
@@ -619,7 +619,7 @@ bot.on('message', async (msg) => {
         } else {
           for (const row of validRows) {
             logger.info(`Przetwarzam rekord ID ${row.id}, username: ${JSON.stringify(row.username)}, typeof: ${typeof row.username}`);
-            const displayUsername = (typeof row.username === 'string' && row.username.trim().length > 0 && !/[^a-zA-Z0-9@_-]/.test(row.username)) ? row.username : 'Użytkownik';
+            const displayUsername = (typeof row.username === 'string' && row.username.trim().length > 0 && !/[^a-zA-Z0-9@_-]/.test(row.username)) ? row.username.toLowerCase() : 'Użytkownik';
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,

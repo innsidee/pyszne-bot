@@ -92,8 +92,7 @@ const STREFY = ['Centrum', 'Ursus', 'Bemowo/Bielany', 'Białołęka/Tarchomin', 
 const session = {};
 const SESSION_TIMEOUT = 60 * 60 * 1000;
 const LAST_COMMAND_TIMEOUT = 5 * 60 * 1000;
-const SHIFT_EXPIRY_HOURS = 24;
-const REMINDER_INTERVAL_HOURS = 3;
+const SHIFT_EXPIRY_HOURS = 168;
 const lastCommand = {};
 const lastReminderTimes = new Map();
 
@@ -308,19 +307,25 @@ async function cleanExpiredShifts() {
       const createdAt = moment(shift.created_at);
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
 
+      // Удаление если смена уже началась или истек срок жизни
+      if (shiftStart.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+        logger.info(`Usunięto zmianę ID ${shift.id} - rozpoczęła się lub wygasła`);
+        lastReminderTimes.delete(shift.id);
+        continue;
       }
 
-      const lastReminder = lastReminderTimes.get(shift.id) || createdAt;
-      const minutesSinceCreation = now.diff(createdAt, 'minutes', true);
-      if (minutesSinceCreation >= SHIFT_EXPIRY_HOURS * 60 || shiftStart.isSameOrBefore(now)) {
-        await sendReminder(shift);
-      }
-
+      // Напоминание ровно за час перед началом смены
+      const minutesToStart = shiftStart.diff(now, 'minutes');
+     if (minutesToStart <= 120 && minutesToStart > 115) { // Okno 5 minut
+  await sendReminder(shift);
+  continue;
+}
+    }
   } catch (error) {
     logger.error(`Błąd podczas czyszczenia wygasłych zmian: ${error.message}`);
   }
 }
-
 
 async function updateStats(userId, field, increment = 1) {
   try {

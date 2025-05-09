@@ -619,7 +619,9 @@ bot.on('message', async (msg) => {
         } else {
           for (const row of validRows) {
             logger.info(`Przetwarzam rekord ID ${row.id}, username: ${JSON.stringify(row.username)}, typeof: ${typeof row.username}`);
-            const displayUsername = (typeof row.username === 'string' && row.username.trim().length > 0 && !/[^a-zA-Z0-9@_-]/.test(row.username)) ? row.username.toLowerCase() : 'Użytkownik';
+            const rawUsername = String(row.username || '').trim();
+            const isValidUsername = rawUsername.length > 0 && !/[^a-zA-Z0-9@_-]/.test(rawUsername);
+            const displayUsername = isValidUsername ? rawUsername.toLowerCase() : 'Użytkownik';
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,

@@ -382,12 +382,13 @@ bot.onText(/\/start/, async (msg) => {
   logger.info(`Użytkownik ${msg.chat.id} (@${msg.from.username || 'brak'}) uruchomił /start`);
 });
 
+const ADMIN_CHAT_ID = 606154517;
+
 bot.onText(/\/broadcast/, async (msg) => {
   const chatId = msg.chat.id;
-  const username = msg.from.username;
-  if (username !== ADMIN_CHAT_ID.replace('@', '')) {
+  if (chatId !== 606154517) {
     await bot.sendMessage(chatId, 'Nie masz uprawnień do tej komendy.', mainKeyboard);
-    logger.info(`Nieautoryzowana próba użycia /broadcast przez ${chatId} (@${username})`);
+    logger.info(`Nieautoryzowana próba użycia /broadcast przez ${chatId}`);
     return;
   }
 
@@ -395,7 +396,7 @@ bot.onText(/\/broadcast/, async (msg) => {
   session[chatId] = { mode: 'broadcast', messagesToDelete: [], userMessages: [], lastActive: Date.now() };
   const message = await bot.sendMessage(chatId, 'Wpisz treść wiadomości, którą chcesz rozesłać:', returnKeyboard);
   session[chatId].messagesToDelete.push(message.message_id);
-  logger.info(`Użytkownik ${chatId} (@${username}) rozpoczął broadcast`);
+  logger.info(`Użytkownik ${chatId} rozpoczął broadcast`);
 });
 
 async function getUserProfile(chatId) {

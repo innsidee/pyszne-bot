@@ -609,8 +609,10 @@ bot.on('message', async (msg) => {
           logger.info(`Brak aktywnych zmian w strefie ${text} dla ${chatId}`);
         } else {
           for (const row of validRows) {
-            // Проверка типа username и безопасное значение по умолчанию
-            const displayUsername = typeof row.username === 'string' ? row.username : 'Użytkownik';
+            // Logowanie wartości username przed użyciem, żeby namierzyć problem
+            logger.info(`Przetwarzam rekord ID ${row.id}, username: ${JSON.stringify(row.username)}`);
+            // Rygorystyczne sprawdzenie typu i wartości username
+            const displayUsername = (typeof row.username === 'string' && row.username.trim().length > 0) ? row.username : 'Użytkownik';
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,

@@ -419,7 +419,7 @@ bot.onText(/\/broadcast/, async (msg) => {
 
 async function getUserProfile(chatId) {
   const profile = await db.get(`SELECT first_name, last_name, courier_id FROM user_profiles WHERE chat_id = $1`, [chatId]);
-  return profile || {  { first_name: null, last_name: null, courier_id: null };
+  return profile || { first_name: null, last_name: null, courier_id: null };
 }
 
 async function saveUserProfile(chatId, text) {

@@ -97,7 +97,7 @@ const REMINDER_INTERVAL_HOURS = 3;
 const lastCommand = {};
 const lastReminderTimes = new Map();
 
-const ADMIN_CHAT_ID = '@oginside66';
+const ADMIN_CHAT_ID = 606154517;
 const mainKeyboard = {
   reply_markup: {
     keyboard: [
@@ -308,12 +308,19 @@ async function cleanExpiredShifts() {
       const createdAt = moment(shift.created_at);
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
-        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-        logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
-        lastReminderTimes.delete(shift.id);
-        continue;
-      }
+  if (!shiftStart.isValid()) {
+  logger.error(`Nieprawidłowy format daty lub godziny dla zmiany ID ${shift.id}: ${shift.date} ${shift.time}`);
+  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+  lastReminderTimes.delete(shift.id);
+  continue;
+}
+
+if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
+  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+  logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
+  lastReminderTimes.delete(shift.id);
+  continue;
+}
       const lastReminder = lastReminderTimes.get(shift.id) || createdAt;
       const hoursSinceLastReminder = now.diff(lastReminder, 'hours', true);
       if (hoursSinceLastReminder >= REMINDER_INTERVAL_HOURS) {

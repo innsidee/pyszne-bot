@@ -315,7 +315,7 @@ async function cleanExpiredShifts() {
       if (minutesSinceCreation >= SHIFT_EXPIRY_HOURS * 60 || shiftStart.isSameOrBefore(now)) {
         await sendReminder(shift);
       }
-    }
+
   } catch (error) {
     logger.error(`Błąd podczas czyszczenia wygasłych zmian: ${error.message}`);
   }

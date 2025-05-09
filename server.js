@@ -382,8 +382,6 @@ bot.onText(/\/start/, async (msg) => {
   logger.info(`Użytkownik ${msg.chat.id} (@${msg.from.username || 'brak'}) uruchomił /start`);
 });
 
-const ADMIN_CHAT_ID = 606154517;
-
 bot.onText(/\/broadcast/, async (msg) => {
   const chatId = msg.chat.id;
   if (chatId !== ADMIN_CHAT_ID) { 

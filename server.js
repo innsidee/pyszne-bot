@@ -330,7 +330,7 @@ async function cleanExpiredShifts() {
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
       const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
       logger.info(`Sprawdzam zmianę ID ${shift.id}: Data ${shift.date}, Czas ${shift.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przed teraz? ${shiftStart.isBefore(now)}`);
-      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isPrior(now)) {
+      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
         lastReminderTimes.delete(shift.id);
@@ -619,13 +619,7 @@ bot.on('message', async (msg) => {
         } else {
           for (const row of validRows) {
             logger.info(`Przetwarzam rekord ID ${row.id}, username: ${JSON.stringify(row.username)}, typeof: ${typeof row.username}`);
-            let rawUsername = row.username;
-            if (typeof rawUsername !== 'string') rawUsername = '';
-            rawUsername = rawUsername.trim();
-
-            const displayUsername = rawUsername.length > 0 && /^[a-zA-Z0-9@._-]+$/.test(rawUsername)
-              ? rawUsername.toLowerCase()
-              : 'Użytkownik';
+            const displayUsername = (row.username || '').toLowerCase() || 'Użytkownik';
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
@@ -848,7 +842,7 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       return;
     }
 
-    const displayUsername = shift.username || 'Użytkownik';
+    const displayUsername = (shift.username || '').toLowerCase() || 'Użytkownik';
     let notificationSent = false;
     try {
       await bot.sendMessage(shift.chat_id,

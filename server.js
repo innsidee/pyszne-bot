@@ -319,9 +319,6 @@ if (shiftEnd.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY
   continue;
 }
 
-
-      }
-
       // Напоминание ровно за час перед началом смены
       const minutesToStart = shiftStart.diff(now, 'minutes');
      if (minutesToStart <= 120 && minutesToStart > 115) { // Okno 5 minut

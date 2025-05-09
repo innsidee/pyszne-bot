@@ -780,7 +780,7 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
     let notificationSent = false;
     try {
       await bot.sendMessage(shift.chat_id,
-        `@${takerUsername} (${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}, Strefa: ${shift.strefa}\nSkontaktuj się z nim, aby ustalić szczegóły.`);
+        `@${takerUsername} (${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}`);
       logger.info(`Wiadomość wysłana do chatId ${shift.chat_id} (@${shift.username})`);
       notificationSent = true;
 

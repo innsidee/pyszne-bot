@@ -3,11 +3,9 @@ const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
-const moment = require('moment-timezone');
+const moment = require('moment');
 const winston = require('winston');
-
 moment.locale('pl');
-moment.tz.setDefault('Europe/Warsaw');
 
 dotenv.config();
 const token = process.env.TELEGRAM_TOKEN;
@@ -61,7 +59,6 @@ const db = {
     try {
       await client.query(query, params);
     } catch (err) {
-      logger.error(`Błąd wykonania zapytania: ${err.message}`, { query, params });
       throw err;
     } finally {
       client.release();
@@ -73,7 +70,6 @@ const db = {
       const res = await client.query(query, params);
       return res.rows[0] || null;
     } catch (err) {
-      logger.error(`Błąd pobierania rekordu: ${err.message}`, { query, params });
       throw err;
     } finally {
       client.release();
@@ -85,7 +81,6 @@ const db = {
       const res = await client.query(query, params);
       return res.rows;
     } catch (err) {
-      logger.error(`Błąd pobierania listy: ${err.message}`, { query, params });
       throw err;
     } finally {
       client.release();
@@ -185,10 +180,6 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled Rejection:', reason);
-});
-
 async function clearSession(chatId) {
   const sess = session[chatId];
   if (sess?.messagesToDelete) {
@@ -219,15 +210,15 @@ async function checkLastCommand(chatId) {
 }
 
 function parseDate(text) {
-  const today = moment.tz('Europe/Warsaw').startOf('day');
-  const tomorrow = moment.tz('Europe/Warsaw').add(1, 'day').startOf('day');
-  const dayAfterTomorrow = moment.tz('Europe/Warsaw').add(2, 'day').startOf('day');
+  const today = moment().startOf('day');
+  const tomorrow = moment().add(1, 'day').startOf('day');
+  const dayAfterTomorrow = moment().add(2, 'day').startOf('day');
 
   if (text.toLowerCase() === 'dzisiaj') return today.format('DD.MM.YYYY');
   if (text.toLowerCase() === 'jutro') return tomorrow.format('DD.MM.YYYY');
   if (text.toLowerCase() === 'pojutrze') return dayAfterTomorrow.format('DD.MM.YYYY');
 
-  const parsed = moment.tz(text, ['DD.MM', 'DD.MM.YYYY'], 'Europe/Warsaw', true);
+  const parsed = moment(text, ['DD.MM', 'DD.MM.YYYY'], true);
   if (parsed.isValid()) {
     if (parsed.isBefore(today)) {
       return null;
@@ -241,11 +232,6 @@ function parseTime(text) {
   const match = text.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
   if (match) {
     const [_, startHour, startMinute, endHour, endMinute] = match;
-    const startHourFormatted = parseInt(startHour).toString().padStart(2, '0');
-    const startMinuteFormatted = parseInt(startMinute).toString().padStart(2, '0');
-    const endHourFormatted = parseInt(endHour).toString().padStart(2, '0');
-    const endMinuteFormatted = parseInt(endMinute).toString().padStart(2, '0');
-
     const startTotalMinutes = parseInt(startHour) * 60 + parseInt(startMinute);
     const endTotalMinutes = parseInt(endHour) * 60 + parseInt(endMinute);
 
@@ -256,7 +242,7 @@ function parseTime(text) {
       parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59 &&
       endTotalMinutes > startTotalMinutes
     ) {
-      return `${startHourFormatted}:${startMinuteFormatted}-${endHourFormatted}:${endMinuteFormatted}`;
+      return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
     }
   }
   return null;
@@ -271,23 +257,18 @@ async function sendErr(chatId, sess, message) {
 async function notifySubscribers(strefa, date, time, username, chatId) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [strefa]);
-    const shiftStart = moment.tz(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-    if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
-      logger.info(`Powiadomienia dla zmiany ${date}, ${time} w strefie ${strefa} nie zostały wysłane, ponieważ zmiana już się rozpoczęła`);
-      return;
-    }
-
-    await Promise.all(subscribers.map(async (sub, index) => {
+    for (let i = 0; i < subscribers.length; i++) {
+      const sub = subscribers[i];
       if (sub.user_id !== chatId) {
-        await new Promise(resolve => setTimeout(resolve, index * 100));
-        try {
-          await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
-          logger.info(`Wysłano powiadomienie do ${sub.user_id}: Nowa zmiana w ${strefa}`);
-        } catch (err) {
-          logger.error(`Błąd wysyłania powiadomienia do ${sub.user_id}: ${err.message}`);
-        }
+        setTimeout(async () => {
+          const shiftStart = moment(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+          if (shiftStart.isAfter(moment())) {
+            await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
+            logger.info(`Wysłano powiadomienie do ${sub.user_id}: Nowa zmiana w ${strefa}`);
+          }
+        }, i * 100);
       }
-    }));
+    }
   } catch (error) {
     logger.error('Błąd podczas powiadamiania subskrybentów:', error.message);
   }
@@ -295,41 +276,38 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
 
 async function sendReminder(shift) {
   const shiftId = shift.id;
-  const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-  if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
-    logger.info(`Przypomnienie dla zmiany ID ${shiftId} nie zostało wysłane, ponieważ zmiana już się rozpoczęła`);
-    return;
-  }
-
-  try {
-    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
-    await Promise.all(subscribers.map(async (sub, index) => {
-      if (sub.user_id !== shift.chat_id) {
-        await new Promise(resolve => setTimeout(resolve, index * 100));
-        try {
-          await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
-          logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
-        } catch (err) {
-          logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
+  const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+  if (shiftStart.isAfter(moment())) {
+    try {
+      const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
+      for (let i = 0; i < subscribers.length; i++) {
+        const sub = subscribers[i];
+        if (sub.user_id !== shift.chat_id) {
+          setTimeout(async () => {
+            try {
+              await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
+              logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
+            } catch (err) {
+              logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
+            }
+          }, i * 100);
         }
       }
-    }));
-    lastReminderTimes.set(shiftId, moment.tz('Europe/Warsaw'));
-  } catch (error) {
-    logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
+      lastReminderTimes.set(shiftId, moment());
+    } catch (error) {
+      logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
+    }
   }
 }
 
 async function cleanExpiredShifts() {
   try {
     const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa, created_at FROM shifts`);
-    const now = moment.tz('Europe/Warsaw');
-    logger.info(`Uruchomiono cleanExpiredShifts o ${now.format('YYYY-MM-DD HH:mm:ss')}`);
+    const now = moment();
     for (const shift of shifts) {
-      const createdAt = moment.tz(shift.created_at, 'Europe/Warsaw');
+      const createdAt = moment(shift.created_at);
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
-      const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-      logger.info(`Sprawdzam zmianę ID ${shift.id}: Data ${shift.date}, Czas ${shift.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przed teraz? ${shiftStart.isBefore(now)}`);
+      const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
       if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
@@ -396,14 +374,14 @@ async function sendBroadcast(chatId, message) {
 bot.onText(/\/start/, async (msg) => {
   clearSession(msg.chat.id);
   updateLastCommand(msg.chat.id);
-  session[msg.chat.id] = { mode: null, messagesToDelete: [], userMessages: [], lastActive: Date.now(), userProfile: await getUserProfile(msg.chat.id) };
+  session[msg.chat.id] = { lastActive: Date.now(), userProfile: await getUserProfile(msg.chat.id) };
   await bot.sendMessage(msg.chat.id, 'Cześć! Co chcesz zrobić?', mainKeyboard);
   logger.info(`Użytkownik ${msg.chat.id} (@${msg.from.username || 'brak'}) uruchomił /start`);
 });
 
 bot.onText(/\/broadcast/, async (msg) => {
   const chatId = msg.chat.id;
-  const username = msg.from.username || '';
+  const username = msg.from.username;
   if (username !== ADMIN_CHAT_ID.replace('@', '')) {
     await bot.sendMessage(chatId, 'Nie masz uprawnień do tej komendy.', mainKeyboard);
     logger.info(`Nieautoryzowana próba użycia /broadcast przez ${chatId} (@${username})`);
@@ -422,19 +400,13 @@ async function getUserProfile(chatId) {
   return profile || { first_name: null, last_name: null, courier_id: null };
 }
 
-async function saveUserProfile(chatId, text) {
-  const parts = text.split(/\s+/).filter(part => part);
-  if (parts.length !== 3 || isNaN(parts[2])) {
-    throw new Error('Błąd formatu. Podaj imię, nazwisko i ID kuriera, oddzielone spacjami (np. Jan Kowalski 12345).');
-  }
-  const [newFirstName, newLastName, newCourierId] = parts;
+async function saveUserProfile(chatId, firstName, lastName, courierId) {
   await db.run(
     `INSERT INTO user_profiles (chat_id, first_name, last_name, courier_id) VALUES ($1, $2, $3, $4) 
      ON CONFLICT (chat_id) DO UPDATE SET first_name = $2, last_name = $3, courier_id = $4`,
-    [chatId, newFirstName, newLastName, newCourierId]
+    [chatId, firstName, lastName, courierId]
   );
-  logger.info(`Zapisano profil dla ${chatId}: ${newFirstName} ${newLastName}, ID: ${newCourierId}`);
-  return { first_name: newFirstName, last_name: newLastName, courier_id: newCourierId };
+  logger.info(`Zapisano profil dla ${chatId}: ${firstName} ${lastName}, ID: ${courierId}`);
 }
 
 bot.on('message', async (msg) => {
@@ -444,7 +416,7 @@ bot.on('message', async (msg) => {
 
   if (!await checkLastCommand(chatId)) return;
 
-  session[chatId] = { ...session[chatId], mode: session[chatId]?.mode || null, messagesToDelete: session[chatId]?.messagesToDelete || [], userMessages: session[chatId]?.userMessages || [], lastActive: Date.now(), userProfile: session[chatId]?.userProfile || await getUserProfile(chatId) };
+  session[chatId] = { ...session[chatId], lastActive: Date.now(), userProfile: session[chatId]?.userProfile || await getUserProfile(chatId) };
   const sess = session[chatId];
   if (!sess) return;
 
@@ -524,24 +496,19 @@ bot.on('message', async (msg) => {
 
       try {
         const shifts = await db.all(`SELECT id, date, time, strefa FROM shifts WHERE chat_id = $1 ORDER BY created_at DESC`, [chatId]);
-        const validShifts = shifts.filter(shift => {
-          const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-          return shiftStart.isAfter(moment.tz('Europe/Warsaw'));
-        });
-
-        if (!validShifts.length) {
-          await bot.sendMessage(chatId, 'Nie masz żadnych aktywnych zmian do usunięcia.', mainKeyboard);
-          logger.info(`Użytkownik ${chatId} nie ma aktywnych zmian do usunięcia`);
+        if (!shifts.length) {
+          await bot.sendMessage(chatId, 'Nie masz żadnych zmian do usunięcia.', mainKeyboard);
+          logger.info(`Użytkownik ${chatId} nie ma zmian do usunięcia`);
           return;
         }
 
-        const inlineKeyboard = validShifts.map(shift => [
+        const inlineKeyboard = shifts.map(shift => [
           { text: `${shift.date}, ${shift.time}, ${shift.strefa}`, callback_data: `delete_shift_${shift.id}` },
         ]);
         await bot.sendMessage(chatId, 'Wybierz zmianę do usunięcia:', {
           reply_markup: { inline_keyboard: inlineKeyboard },
         });
-        logger.info(`Wysłano listę aktywnych zmian do usunięcia użytkownikowi ${chatId}`);
+        logger.info(`Wysłano listę zmian do usunięcia użytkownikowi ${chatId}`);
       } catch (error) {
         logger.error(`Błąd podczas pobierania zmian do usunięcia dla ${chatId}: ${error.message}`);
         await bot.sendMessage(chatId, 'Wystąpił błąd podczas pobierania zmian.', mainKeyboard);
@@ -598,35 +565,23 @@ bot.on('message', async (msg) => {
       try {
         const rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [text]);
         logger.info(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
-
-        const now = moment.tz('Europe/Warsaw');
-        const validRows = rows.filter(row => {
-          const dateTimeString = `${row.date} ${row.time.split('-')[0]}`;
-          const shiftStart = moment.tz(dateTimeString, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw', true);
-          if (!shiftStart.isValid()) {
-            logger.error(`Nieprawidłowy format daty/czasu dla zmiany ID ${row.id}: ${dateTimeString}`);
-            return false;
-          }
-          const isFuture = shiftStart.isAfter(now);
-          logger.info(`Zmiana ID ${row.id}: Data ${row.date}, Czas ${row.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przyszła? ${isFuture}`);
-          return isFuture;
-        });
-
-        if (!validRows.length) {
+        if (!rows.length) {
           const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian w tej strefie.', zonesKeyboard);
           sess.messagesToDelete.push(msg2.message_id);
-          logger.info(`Brak aktywnych zmian w strefie ${text} dla ${chatId}`);
+          logger.info(`Brak zmian w strefie ${text} dla ${chatId}`);
         } else {
-          for (const row of validRows) {
-            logger.info(`Przetwarzam rekord ID ${row.id}, username: ${JSON.stringify(row.username)}, typeof: ${typeof row.username}`);
-            const displayUsername = (row.username || '').toLowerCase() || 'Użytkownik';
-            const msg3 = await bot.sendMessage(
-              chatId,
-              `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
-              { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
-            );
-            sess.messagesToDelete.push(msg3.message_id);
-            logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
+          for (const row of rows) {
+            const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+            if (shiftStart.isAfter(moment())) {
+              const displayUsername = row.username || 'Użytkownik';
+              const msg3 = await bot.sendMessage(
+                chatId,
+                `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
+                { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
+              );
+              sess.messagesToDelete.push(msg3.message_id);
+              logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
+            }
           }
         }
       } catch (err) {
@@ -660,15 +615,6 @@ bot.on('message', async (msg) => {
         if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
         sess.time = time;
 
-        const shiftStart = moment.tz(`${sess.date} ${sess.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-        if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
-          const errMsg = await bot.sendMessage(chatId, 'Nie możesz oddać zmiany, która już się rozpoczęła lub jest w przeszłości.', mainKeyboard);
-          sess.messagesToDelete.push(errMsg.message_id);
-          logger.info(`Użytkownik ${chatId} próbował oddać zmianę w przeszłości: ${sess.date}, ${sess.time}, ${sess.strefa}`);
-          clearSession(chatId);
-          return;
-        }
-
         const existingShift = await db.get(
           `SELECT id FROM shifts WHERE username = $1 AND date = $2 AND time = $3 AND strefa = $4`,
           [username, sess.date, sess.time, sess.strefa]
@@ -699,14 +645,18 @@ bot.on('message', async (msg) => {
     }
 
     if (sess.mode === 'setprofile') {
+      const [firstName, lastName, courierId] = text.split(/\s+/);
+      if (!firstName || !lastName || !courierId || isNaN(courierId)) {
+        return await sendErr(chatId, sess, 'Błąd formatu. Podaj imię, nazwisko i ID kuriera, oddzielone spacjami (np. Jan Kowalski 12345).');
+      }
       try {
-        const profile = await saveUserProfile(chatId, text);
-        session[chatId].userProfile = profile;
-        await bot.sendMessage(chatId, `Zapisano profil: ${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}`, mainKeyboard);
-        logger.info(`Ustawiono profil dla ${chatId}: ${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}`);
+        await saveUserProfile(chatId, firstName, lastName, courierId);
+        session[chatId].userProfile = { first_name: firstName, last_name: lastName, courier_id: courierId };
+        await bot.sendMessage(chatId, `Zapisano profil: ${firstName} ${lastName}, ID: ${courierId}`, mainKeyboard);
+        logger.info(`Ustawiono profil dla ${chatId}: ${firstName} ${lastName}, ID: ${courierId}`);
       } catch (error) {
         logger.error(`Błąd zapisywania profilu dla ${chatId}: ${error.message}`);
-        await bot.sendMessage(chatId, error.message, mainKeyboard);
+        await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania profilu.', mainKeyboard);
       } finally {
         clearSession(chatId);
       }
@@ -800,16 +750,8 @@ bot.on('callback_query', async (query) => {
         return;
       }
 
-      const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-      if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
-        await bot.sendMessage(chatId, 'Ta zmiana już się rozpoczęła i nie może być usunięta.', mainKeyboard);
-        logger.info(`Próba usunięcia rozpoczętej zmiany ${shiftId} przez ${chatId}`);
-        return;
-      }
-
       await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
       await updateStats(chatId, 'shifts_given', -1);
-      lastReminderTimes.delete(parseInt(shiftId));
       await bot.sendMessage(chatId, `Usunięto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
       logger.info(`Użytkownik ${chatId} usunął zmianę ID ${shiftId}`);
     } catch (error) {
@@ -829,25 +771,17 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       return;
     }
 
-    const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-    if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
-      await bot.sendMessage(chatId, 'Ta zmiana już się rozpoczęła i nie może być przejęta.', mainKeyboard);
-      logger.info(`Próba przejęcia rozpoczętej zmiany ${shiftId} przez ${chatId}`);
-      return;
-    }
-
     if (!shift.chat_id || isNaN(shift.chat_id)) {
       logger.error(`Nieprawidłowy chat_id osoby oddającej zmianę: ${shift.chat_id}`);
       await bot.sendMessage(chatId, 'Błąd: Nie można skontaktować się z osobą oddającą zmianę. Skontaktuj się z nią ręcznie.', mainKeyboard);
       return;
     }
 
-    const displayUsername = (shift.username || '').toLowerCase() || 'Użytkownik';
     let notificationSent = false;
     try {
       await bot.sendMessage(shift.chat_id,
         `@${takerUsername} (${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}) chce przejąć Twoją zmianę:\nData: ${shift.date}, Godzina: ${shift.time}`);
-      logger.info(`Wiadomość wysłana do chatId ${shift.chat_id} (@${displayUsername})`);
+      logger.info(`Wiadomość wysłana do chatId ${shift.chat_id} (@${shift.username})`);
       notificationSent = true;
 
       await bot.sendMessage(shift.chat_id,
@@ -858,12 +792,12 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       await db.run(`INSERT INTO shift_confirmations (shift_id, giver_chat_id, taker_chat_id, taker_username) VALUES ($1, $2, $3, $4)`,
         [shiftId, shift.chat_id, chatId, `${profile.first_name} ${profile.last_name}`]);
     } catch (error) {
-      logger.error(`Błąd wysyłania wiadomości do chatId ${shift.chat_id} (@${displayUsername}): ${error.message}`);
-      await bot.sendMessage(chatId, `Nie udało się powiadomić @${displayUsername}. Skontaktuj się z nim ręcznie, aby ustalić szczegóły przejęcia zmiany.`, mainKeyboard);
+      logger.error(`Błąd wysyłania wiadomości do chatId ${shift.chat_id} (@${shift.username}): ${error.message}`);
+      await bot.sendMessage(chatId, `Nie udało się powiadomić @${shift.username}. Skontaktuj się z nim ręcznie, aby ustalić szczegóły przejęcia zmiany.`, mainKeyboard);
     }
 
     if (notificationSent) {
-      await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${displayUsername}. Skontaktuj się z nim w celu ustalenia szczegółów.`, mainKeyboard);
+      await bot.sendMessage(chatId, `Wiadomość o Twoim zainteresowaniu została wysłana do @${shift.username}. Skontaktuj się z nim w celu ustalenia szczegółów.`, mainKeyboard);
     }
 
     await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
@@ -887,7 +821,7 @@ setInterval(() => {
     }
   }
   cleanExpiredShifts();
-}, 1 * 60 * 1000);
+}, 5 * 60 * 1000);
 
 setInterval(() => {
   const url = process.env.RENDER_EXTERNAL_URL;
@@ -898,7 +832,7 @@ setInterval(() => {
       logger.error('Błąd pingu:', err.message);
     });
   }
-}, 14 * 60 * 1000);
+}, 240000);
 
 app.get('/', (_, res) => res.send('Bot is running'));
 app.listen(PORT, () => {

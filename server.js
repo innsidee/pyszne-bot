@@ -3,9 +3,9 @@ const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
-const moment = require('moment-timezone'); // Używamy moment-timezone dla lepszej obsługi stref
+const moment = require('moment-timezone');
 moment.locale('pl');
-moment.tz.setDefault('Europe/Warsaw'); // Ustawiamy strefę czasową na Warszawę
+moment.tz.setDefault('Europe/Warsaw');
 
 dotenv.config();
 const token = process.env.TELEGRAM_TOKEN;
@@ -210,15 +210,15 @@ async function checkLastCommand(chatId) {
 }
 
 function parseDate(text) {
-  const today = moment().tz('Europe/Warsaw').startOf('day');
-  const tomorrow = moment().tz('Europe/Warsaw').add(1, 'day').startOf('day');
-  const dayAfterTomorrow = moment().tz('Europe/Warsaw').add(2, 'day').startOf('day');
+  const today = moment.tz('Europe/Warsaw').startOf('day');
+  const tomorrow = moment.tz('Europe/Warsaw').add(1, 'day').startOf('day');
+  const dayAfterTomorrow = moment.tz('Europe/Warsaw').add(2, 'day').startOf('day');
 
   if (text.toLowerCase() === 'dzisiaj') return today.format('DD.MM.YYYY');
   if (text.toLowerCase() === 'jutro') return tomorrow.format('DD.MM.YYYY');
   if (text.toLowerCase() === 'pojutrze') return dayAfterTomorrow.format('DD.MM.YYYY');
 
-  const parsed = moment(text, ['DD.MM', 'DD.MM.YYYY'], true).tz('Europe/Warsaw');
+  const parsed = moment.tz(text, ['DD.MM', 'DD.MM.YYYY'], 'Europe/Warsaw', true);
   if (parsed.isValid()) {
     if (parsed.isBefore(today)) {
       return null;
@@ -242,7 +242,7 @@ function parseTime(text) {
       parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59 &&
       endTotalMinutes > startTotalMinutes
     ) {
-      return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
+      return `${startHour.padStart(2, '0')}:${startMinute.padStart(2, '0')}-${endHour.padStart(2, '0')}:${endMinute.padStart(2, '0')}`;
     }
   }
   return null;
@@ -314,12 +314,12 @@ async function cleanExpiredShifts() {
   try {
     const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa, created_at FROM shifts`);
     const now = moment.tz('Europe/Warsaw');
-    logger.info(`Uruchomiono cleanExpiredShifts o ${now.format()}`);
+    logger.info(`Uruchomiono cleanExpiredShifts o ${now.format('YYYY-MM-DD HH:mm:ss')}`);
     for (const shift of shifts) {
       const createdAt = moment.tz(shift.created_at, 'Europe/Warsaw');
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
       const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-      logger.info(`Sprawdzam zmianę ID ${shift.id}: Start ${shiftStart.format()}, Teraz ${now.format()}`);
+      logger.info(`Sprawdzam zmianę ID ${shift.id}: Data ${shift.date}, Czas ${shift.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przed teraz? ${shiftStart.isBefore(now)}`);
       if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
@@ -583,11 +583,12 @@ bot.on('message', async (msg) => {
         const rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [text]);
         logger.info(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
 
+        const now = moment.tz('Europe/Warsaw');
         const validRows = rows.filter(row => {
           const shiftStart = moment.tz(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
-          const now = moment.tz('Europe/Warsaw');
-          logger.info(`Sprawdzam zmianę ID ${row.id}: Start ${shiftStart.format()}, Teraz ${now.format()}`);
-          return shiftStart.isAfter(now);
+          const isFuture = shiftStart.isAfter(now);
+          logger.info(`Zmiana ID ${row.id}: Data ${row.date}, Czas ${row.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przyszła? ${isFuture}`);
+          return isFuture;
         });
 
         if (!validRows.length) {
@@ -867,7 +868,7 @@ setInterval(() => {
     }
   }
   cleanExpiredShifts();
-}, 5 * 60 * 1000); // Co 5 minut
+}, 1 * 60 * 1000); // Skrócono do 1 minuty
 
 setInterval(() => {
   const url = process.env.RENDER_EXTERNAL_URL;

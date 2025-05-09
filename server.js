@@ -308,17 +308,11 @@ async function cleanExpiredShifts() {
       const createdAt = moment(shift.created_at);
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
 
-      // Удалить если дата старше 24ч ИЛИ смена уже началась (start <= now)
-      if (shiftStart.isSameOrBefore(now) || now.diff(createdAt, 'hours', true) >= SHIFT_EXPIRY_HOURS) {
-        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-        logger.info(`Usunięto zmianę ID ${shift.id} - rozpoczęła się lub wygasła`);
-        lastReminderTimes.delete(shift.id);
-        continue;
       }
 
       const lastReminder = lastReminderTimes.get(shift.id) || createdAt;
-      const hoursSinceLastReminder = now.diff(lastReminder, 'hours', true);
-      if (hoursSinceLastReminder >= REMINDER_INTERVAL_HOURS) {
+      const minutesSinceCreation = now.diff(createdAt, 'minutes', true);
+      if (minutesSinceCreation >= SHIFT_EXPIRY_HOURS * 60 || shiftStart.isSameOrBefore(now)) {
         await sendReminder(shift);
       }
     }

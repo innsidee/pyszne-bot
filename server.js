@@ -306,21 +306,16 @@ async function cleanExpiredShifts() {
     const now = moment();
     for (const shift of shifts) {
       const createdAt = moment(shift.created_at);
-      const hoursSinceCreation = now.diff(createdAt, 'hours', true);
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-  if (!shiftStart.isValid()) {
-  logger.error(`Nieprawidłowy format daty lub godziny dla zmiany ID ${shift.id}: ${shift.date} ${shift.time}`);
-  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-  lastReminderTimes.delete(shift.id);
-  continue;
-}
 
-if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
-  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-  logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
-  lastReminderTimes.delete(shift.id);
-  continue;
-}
+      // Удалить если дата старше 24ч ИЛИ смена уже началась (start <= now)
+      if (shiftStart.isSameOrBefore(now) || now.diff(createdAt, 'hours', true) >= SHIFT_EXPIRY_HOURS) {
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+        logger.info(`Usunięto zmianę ID ${shift.id} - rozpoczęła się lub wygasła`);
+        lastReminderTimes.delete(shift.id);
+        continue;
+      }
+
       const lastReminder = lastReminderTimes.get(shift.id) || createdAt;
       const hoursSinceLastReminder = now.diff(lastReminder, 'hours', true);
       if (hoursSinceLastReminder >= REMINDER_INTERVAL_HOURS) {
@@ -331,6 +326,7 @@ if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
     logger.error(`Błąd podczas czyszczenia wygasłych zmian: ${error.message}`);
   }
 }
+
 
 async function updateStats(userId, field, increment = 1) {
   try {

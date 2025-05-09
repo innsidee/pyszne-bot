@@ -257,14 +257,21 @@ async function sendErr(chatId, sess, message) {
 async function notifySubscribers(strefa, date, time, username, chatId) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [strefa]);
+    const shiftStart = moment(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+    if (!shiftStart.isAfter(moment())) {
+      logger.info(`Powiadomienia dla zmiany ${date}, ${time} w strefie ${strefa} nie zostały wysłane, ponieważ zmiana już się rozpoczęła`);
+      return;
+    }
+
     for (let i = 0; i < subscribers.length; i++) {
       const sub = subscribers[i];
       if (sub.user_id !== chatId) {
         setTimeout(async () => {
-          const shiftStart = moment(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-          if (shiftStart.isAfter(moment())) {
+          try {
             await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
             logger.info(`Wysłano powiadomienie do ${sub.user_id}: Nowa zmiana w ${strefa}`);
+          } catch (err) {
+            logger.error(`Błąd wysyłania powiadomienia do ${sub.user_id}: ${err.message}`);
           }
         }, i * 100);
       }
@@ -277,26 +284,29 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
 async function sendReminder(shift) {
   const shiftId = shift.id;
   const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-  if (shiftStart.isAfter(moment())) {
-    try {
-      const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
-      for (let i = 0; i < subscribers.length; i++) {
-        const sub = subscribers[i];
-        if (sub.user_id !== shift.chat_id) {
-          setTimeout(async () => {
-            try {
-              await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
-              logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
-            } catch (err) {
-              logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
-            }
-          }, i * 100);
-        }
+  if (!shiftStart.isAfter(moment())) {
+    logger.info(`Przypomnienie dla zmiany ID ${shiftId} nie zostało wysłane, ponieważ zmiana już się rozpoczęła`);
+    return;
+  }
+
+  try {
+    const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
+    for (let i = 0; i < subscribers.length; i++) {
+      const sub = subscribers[i];
+      if (sub.user_id !== shift.chat_id) {
+        setTimeout(async () => {
+          try {
+            await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
+            logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
+          } catch (err) {
+            logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
+          }
+        }, i * 100);
       }
-      lastReminderTimes.set(shiftId, moment());
-    } catch (error) {
-      logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
     }
+    lastReminderTimes.set(shiftId, moment());
+  } catch (error) {
+    logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
   }
 }
 
@@ -496,19 +506,24 @@ bot.on('message', async (msg) => {
 
       try {
         const shifts = await db.all(`SELECT id, date, time, strefa FROM shifts WHERE chat_id = $1 ORDER BY created_at DESC`, [chatId]);
-        if (!shifts.length) {
-          await bot.sendMessage(chatId, 'Nie masz żadnych zmian do usunięcia.', mainKeyboard);
-          logger.info(`Użytkownik ${chatId} nie ma zmian do usunięcia`);
+        const validShifts = shifts.filter(shift => {
+          const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+          return shiftStart.isAfter(moment());
+        });
+
+        if (!validShifts.length) {
+          await bot.sendMessage(chatId, 'Nie masz żadnych aktywnych zmian do usunięcia.', mainKeyboard);
+          logger.info(`Użytkownik ${chatId} nie ma aktywnych zmian do usunięcia`);
           return;
         }
 
-        const inlineKeyboard = shifts.map(shift => [
+        const inlineKeyboard = validShifts.map(shift => [
           { text: `${shift.date}, ${shift.time}, ${shift.strefa}`, callback_data: `delete_shift_${shift.id}` },
         ]);
         await bot.sendMessage(chatId, 'Wybierz zmianę do usunięcia:', {
           reply_markup: { inline_keyboard: inlineKeyboard },
         });
-        logger.info(`Wysłano listę zmian do usunięcia użytkownikowi ${chatId}`);
+        logger.info(`Wysłano listę aktywnych zmian do usunięcia użytkownikowi ${chatId}`);
       } catch (error) {
         logger.error(`Błąd podczas pobierania zmian do usunięcia dla ${chatId}: ${error.message}`);
         await bot.sendMessage(chatId, 'Wystąpił błąd podczas pobierania zmian.', mainKeyboard);
@@ -565,23 +580,26 @@ bot.on('message', async (msg) => {
       try {
         const rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [text]);
         logger.info(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
-        if (!rows.length) {
+
+        const validRows = rows.filter(row => {
+          const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+          return shiftStart.isAfter(moment());
+        });
+
+        if (!validRows.length) {
           const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian w tej strefie.', zonesKeyboard);
           sess.messagesToDelete.push(msg2.message_id);
-          logger.info(`Brak zmian w strefie ${text} dla ${chatId}`);
+          logger.info(`Brak aktywnych zmian w strefie ${text} dla ${chatId}`);
         } else {
-          for (const row of rows) {
-            const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-            if (shiftStart.isAfter(moment())) {
-              const displayUsername = row.username || 'Użytkownik';
-              const msg3 = await bot.sendMessage(
-                chatId,
-                `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
-                { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
-              );
-              sess.messagesToDelete.push(msg3.message_id);
-              logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
-            }
+          for (const row of validRows) {
+            const displayUsername = row.username || 'Użytkownik';
+            const msg3 = await bot.sendMessage(
+              chatId,
+              `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
+              { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
+            );
+            sess.messagesToDelete.push(msg3.message_id);
+            logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
           }
         }
       } catch (err) {
@@ -614,6 +632,15 @@ bot.on('message', async (msg) => {
         const time = parseTime(text);
         if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
         sess.time = time;
+
+        const shiftStart = moment(`${sess.date} ${sess.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+        if (!shiftStart.isAfter(moment())) {
+          const errMsg = await bot.sendMessage(chatId, 'Nie możesz oddać zmiany, która już się rozpoczęła lub jest w przeszłości.', mainKeyboard);
+          sess.messagesToDelete.push(errMsg.message_id);
+          logger.info(`Użytkownik ${chatId} próbował oddać zmianę w przeszłości: ${sess.date}, ${sess.time}, ${sess.strefa}`);
+          clearSession(chatId);
+          return;
+        }
 
         const existingShift = await db.get(
           `SELECT id FROM shifts WHERE username = $1 AND date = $2 AND time = $3 AND strefa = $4`,
@@ -750,8 +777,16 @@ bot.on('callback_query', async (query) => {
         return;
       }
 
+      const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+      if (!shiftStart.isAfter(moment())) {
+        await bot.sendMessage(chatId, 'Ta zmiana już się rozpoczęła i nie może być usunięta.', mainKeyboard);
+        logger.info(`Próba usunięcia rozpoczętej zmiany ${shiftId} przez ${chatId}`);
+        return;
+      }
+
       await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
       await updateStats(chatId, 'shifts_given', -1);
+      lastReminderTimes.delete(parseInt(shiftId));
       await bot.sendMessage(chatId, `Usunięto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
       logger.info(`Użytkownik ${chatId} usunął zmianę ID ${shiftId}`);
     } catch (error) {
@@ -768,6 +803,13 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
     if (!shift) {
       await bot.sendMessage(chatId, 'Ta zmiana już nie jest dostępna.', mainKeyboard);
       logger.info(`Zmiana ID ${shiftId} niedostępna dla ${chatId}`);
+      return;
+    }
+
+    const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+    if (!shiftStart.isAfter(moment())) {
+      await bot.sendMessage(chatId, 'Ta zmiana już się rozpoczęła i nie może być przejęta.', mainKeyboard);
+      logger.info(`Próba przejęcia rozpoczętej zmiany ${shiftId} przez ${chatId}`);
       return;
     }
 

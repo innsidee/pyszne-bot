@@ -4,6 +4,8 @@ const axios = require('axios');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
 const moment = require('moment-timezone');
+const winston = require('winston');
+
 moment.locale('pl');
 moment.tz.setDefault('Europe/Warsaw');
 
@@ -232,6 +234,11 @@ function parseTime(text) {
   const match = text.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
   if (match) {
     const [_, startHour, startMinute, endHour, endMinute] = match;
+    const startHourFormatted = parseInt(startHour).toString().padStart(2, '0');
+    const startMinuteFormatted = parseInt(startMinute).toString().padStart(2, '0');
+    const endHourFormatted = parseInt(endHour).toString().padStart(2, '0');
+    const endMinuteFormatted = parseInt(endMinute).toString().padStart(2, '0');
+
     const startTotalMinutes = parseInt(startHour) * 60 + parseInt(startMinute);
     const endTotalMinutes = parseInt(endHour) * 60 + parseInt(endMinute);
 
@@ -242,7 +249,7 @@ function parseTime(text) {
       parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59 &&
       endTotalMinutes > startTotalMinutes
     ) {
-      return `${startHour.padStart(2, '0')}:${startMinute.padStart(2, '0')}-${endHour.padStart(2, '0')}:${endMinute.padStart(2, '0')}`;
+      return `${startHourFormatted}:${startMinuteFormatted}-${endHourFormatted}:${endMinuteFormatted}`;
     }
   }
   return null;
@@ -585,7 +592,13 @@ bot.on('message', async (msg) => {
 
         const now = moment.tz('Europe/Warsaw');
         const validRows = rows.filter(row => {
-          const shiftStart = moment.tz(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+          // Dodajemy walidację formatu daty i czasu
+          const dateTimeString = `${row.date} ${row.time.split('-')[0]}`;
+          const shiftStart = moment.tz(dateTimeString, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw', true);
+          if (!shiftStart.isValid()) {
+            logger.error(`Nieprawidłowy format daty/czasu dla zmiany ID ${row.id}: ${dateTimeString}`);
+            return false;
+          }
           const isFuture = shiftStart.isAfter(now);
           logger.info(`Zmiana ID ${row.id}: Data ${row.date}, Czas ${row.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przyszła? ${isFuture}`);
           return isFuture;

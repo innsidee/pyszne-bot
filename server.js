@@ -234,15 +234,11 @@ function parseTime(text) {
     const startTotalMinutes = parseInt(startHour) * 60 + parseInt(startMinute);
     const endTotalMinutes = parseInt(endHour) * 60 + parseInt(endMinute);
 
-    if (
-      parseInt(startHour) >= 0 && parseInt(startHour) <= 23 &&
-      parseInt(startMinute) >= 0 && parseInt(startMinute) <= 59 &&
-      parseInt(endHour) >= 0 && parseInt(endHour) <= 23 &&
-      parseInt(endMinute) >= 0 && parseInt(endMinute) <= 59 &&
-      endTotalMinutes > startTotalMinutes
-    ) {
-      return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
-    }
+if (match) {
+  const [_, startHour, startMinute, endHour, endMinute] = match;
+  return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
+}
+
   }
   return null;
 }
@@ -308,11 +304,22 @@ async function cleanExpiredShifts() {
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
 
       // Удаление если смена уже началась или истек срок жизни
-      if (shiftStart.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
-        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-        logger.info(`Usunięto zmianę ID ${shift.id} - rozpoczęła się lub wygasła`);
-        lastReminderTimes.delete(shift.id);
-        continue;
+if (shiftStart.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
+  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+  logger.info(`Usunięto zmianę ID ${shift.id} - rozpoczęła się lub wygasła`);
+  lastReminderTimes.delete(shift.id);
+  continue;
+}
+
+const shiftEnd = moment(`${shift.date} ${shift.time.split('-')[1]}`, 'DD.MM.YYYY HH:mm');
+if (shiftEnd.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
+  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+  logger.info(`Usunięto zmianę ID ${shift.id} - zakończyła się lub wygasła`);
+  lastReminderTimes.delete(shift.id);
+  continue;
+}
+
+
       }
 
       // Напоминание ровно за час перед началом смены

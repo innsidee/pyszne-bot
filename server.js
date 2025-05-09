@@ -592,7 +592,6 @@ bot.on('message', async (msg) => {
 
         const now = moment.tz('Europe/Warsaw');
         const validRows = rows.filter(row => {
-          // Dodajemy walidację formatu daty i czasu
           const dateTimeString = `${row.date} ${row.time.split('-')[0]}`;
           const shiftStart = moment.tz(dateTimeString, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw', true);
           if (!shiftStart.isValid()) {
@@ -610,7 +609,8 @@ bot.on('message', async (msg) => {
           logger.info(`Brak aktywnych zmian w strefie ${text} dla ${chatId}`);
         } else {
           for (const row of validRows) {
-            const displayUsername = row.username || 'Użytkownik';
+            // Проверка типа username и безопасное значение по умолчанию
+            const displayUsername = typeof row.username === 'string' ? row.username : 'Użytkownik';
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,

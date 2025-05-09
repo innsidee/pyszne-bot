@@ -3,9 +3,9 @@ const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
-const moment = require('moment');
-const winston = require('winston');
+const moment = require('moment-timezone'); // Używamy moment-timezone dla lepszej obsługi stref
 moment.locale('pl');
+moment.tz.setDefault('Europe/Warsaw'); // Ustawiamy strefę czasową na Warszawę
 
 dotenv.config();
 const token = process.env.TELEGRAM_TOKEN;
@@ -210,15 +210,15 @@ async function checkLastCommand(chatId) {
 }
 
 function parseDate(text) {
-  const today = moment().startOf('day');
-  const tomorrow = moment().add(1, 'day').startOf('day');
-  const dayAfterTomorrow = moment().add(2, 'day').startOf('day');
+  const today = moment().tz('Europe/Warsaw').startOf('day');
+  const tomorrow = moment().tz('Europe/Warsaw').add(1, 'day').startOf('day');
+  const dayAfterTomorrow = moment().tz('Europe/Warsaw').add(2, 'day').startOf('day');
 
   if (text.toLowerCase() === 'dzisiaj') return today.format('DD.MM.YYYY');
   if (text.toLowerCase() === 'jutro') return tomorrow.format('DD.MM.YYYY');
   if (text.toLowerCase() === 'pojutrze') return dayAfterTomorrow.format('DD.MM.YYYY');
 
-  const parsed = moment(text, ['DD.MM', 'DD.MM.YYYY'], true);
+  const parsed = moment(text, ['DD.MM', 'DD.MM.YYYY'], true).tz('Europe/Warsaw');
   if (parsed.isValid()) {
     if (parsed.isBefore(today)) {
       return null;
@@ -257,8 +257,8 @@ async function sendErr(chatId, sess, message) {
 async function notifySubscribers(strefa, date, time, username, chatId) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [strefa]);
-    const shiftStart = moment(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-    if (!shiftStart.isAfter(moment())) {
+    const shiftStart = moment.tz(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+    if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
       logger.info(`Powiadomienia dla zmiany ${date}, ${time} w strefie ${strefa} nie zostały wysłane, ponieważ zmiana już się rozpoczęła`);
       return;
     }
@@ -283,8 +283,8 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
 
 async function sendReminder(shift) {
   const shiftId = shift.id;
-  const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-  if (!shiftStart.isAfter(moment())) {
+  const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+  if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
     logger.info(`Przypomnienie dla zmiany ID ${shiftId} nie zostało wysłane, ponieważ zmiana już się rozpoczęła`);
     return;
   }
@@ -304,7 +304,7 @@ async function sendReminder(shift) {
         }, i * 100);
       }
     }
-    lastReminderTimes.set(shiftId, moment());
+    lastReminderTimes.set(shiftId, moment.tz('Europe/Warsaw'));
   } catch (error) {
     logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
   }
@@ -313,11 +313,13 @@ async function sendReminder(shift) {
 async function cleanExpiredShifts() {
   try {
     const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa, created_at FROM shifts`);
-    const now = moment();
+    const now = moment.tz('Europe/Warsaw');
+    logger.info(`Uruchomiono cleanExpiredShifts o ${now.format()}`);
     for (const shift of shifts) {
-      const createdAt = moment(shift.created_at);
+      const createdAt = moment.tz(shift.created_at, 'Europe/Warsaw');
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
-      const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+      const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+      logger.info(`Sprawdzam zmianę ID ${shift.id}: Start ${shiftStart.format()}, Teraz ${now.format()}`);
       if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
@@ -507,8 +509,8 @@ bot.on('message', async (msg) => {
       try {
         const shifts = await db.all(`SELECT id, date, time, strefa FROM shifts WHERE chat_id = $1 ORDER BY created_at DESC`, [chatId]);
         const validShifts = shifts.filter(shift => {
-          const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-          return shiftStart.isAfter(moment());
+          const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+          return shiftStart.isAfter(moment.tz('Europe/Warsaw'));
         });
 
         if (!validShifts.length) {
@@ -582,8 +584,10 @@ bot.on('message', async (msg) => {
         logger.info(`Znaleziono ${rows.length} zmian dla strefy ${text}`);
 
         const validRows = rows.filter(row => {
-          const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-          return shiftStart.isAfter(moment());
+          const shiftStart = moment.tz(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+          const now = moment.tz('Europe/Warsaw');
+          logger.info(`Sprawdzam zmianę ID ${row.id}: Start ${shiftStart.format()}, Teraz ${now.format()}`);
+          return shiftStart.isAfter(now);
         });
 
         if (!validRows.length) {
@@ -633,8 +637,8 @@ bot.on('message', async (msg) => {
         if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
         sess.time = time;
 
-        const shiftStart = moment(`${sess.date} ${sess.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-        if (!shiftStart.isAfter(moment())) {
+        const shiftStart = moment.tz(`${sess.date} ${sess.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+        if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
           const errMsg = await bot.sendMessage(chatId, 'Nie możesz oddać zmiany, która już się rozpoczęła lub jest w przeszłości.', mainKeyboard);
           sess.messagesToDelete.push(errMsg.message_id);
           logger.info(`Użytkownik ${chatId} próbował oddać zmianę w przeszłości: ${sess.date}, ${sess.time}, ${sess.strefa}`);
@@ -777,8 +781,8 @@ bot.on('callback_query', async (query) => {
         return;
       }
 
-      const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-      if (!shiftStart.isAfter(moment())) {
+      const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+      if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
         await bot.sendMessage(chatId, 'Ta zmiana już się rozpoczęła i nie może być usunięta.', mainKeyboard);
         logger.info(`Próba usunięcia rozpoczętej zmiany ${shiftId} przez ${chatId}`);
         return;
@@ -806,8 +810,8 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       return;
     }
 
-    const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-    if (!shiftStart.isAfter(moment())) {
+    const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+    if (!shiftStart.isAfter(moment.tz('Europe/Warsaw'))) {
       await bot.sendMessage(chatId, 'Ta zmiana już się rozpoczęła i nie może być przejęta.', mainKeyboard);
       logger.info(`Próba przejęcia rozpoczętej zmiany ${shiftId} przez ${chatId}`);
       return;
@@ -863,7 +867,7 @@ setInterval(() => {
     }
   }
   cleanExpiredShifts();
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000); // Co 5 minut
 
 setInterval(() => {
   const url = process.env.RENDER_EXTERNAL_URL;

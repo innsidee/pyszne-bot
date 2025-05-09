@@ -102,7 +102,7 @@ const REMINDER_INTERVAL_HOURS = 3;
 const lastCommand = {};
 const lastReminderTimes = new Map();
 
-const ADMIN_CHAT_ID = '@oginside66'; // Полное значение с @
+const ADMIN_CHAT_ID = '@oginside66';
 const mainKeyboard = {
   reply_markup: {
     keyboard: [
@@ -330,7 +330,7 @@ async function cleanExpiredShifts() {
       const hoursSinceCreation = now.diff(createdAt, 'hours', true);
       const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
       logger.info(`Sprawdzam zmianę ID ${shift.id}: Data ${shift.date}, Czas ${shift.time}, Start ${shiftStart.format('YYYY-MM-DD HH:mm:ss')}, Teraz ${now.format('YYYY-MM-DD HH:mm:ss')}, Czy przed teraz? ${shiftStart.isBefore(now)}`);
-      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isBefore(now)) {
+      if (hoursSinceCreation >= SHIFT_EXPIRY_HOURS || shiftStart.isPrior(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła lub się rozpoczęła`);
         lastReminderTimes.delete(shift.id);
@@ -419,7 +419,7 @@ bot.onText(/\/broadcast/, async (msg) => {
 
 async function getUserProfile(chatId) {
   const profile = await db.get(`SELECT first_name, last_name, courier_id FROM user_profiles WHERE chat_id = $1`, [chatId]);
-  return profile || { first_name: null, last_name: null, courier_id: null };
+  return profile || {  { first_name: null, last_name: null, courier_id: null };
 }
 
 async function saveUserProfile(chatId, text) {
@@ -619,9 +619,13 @@ bot.on('message', async (msg) => {
         } else {
           for (const row of validRows) {
             logger.info(`Przetwarzam rekord ID ${row.id}, username: ${JSON.stringify(row.username)}, typeof: ${typeof row.username}`);
-            const rawUsername = String(row.username || '').trim();
-            const isValidUsername = rawUsername.length > 0 && !/[^a-zA-Z0-9@_-]/.test(rawUsername);
-            const displayUsername = isValidUsername ? rawUsername.toLowerCase() : 'Użytkownik';
+            let rawUsername = row.username;
+            if (typeof rawUsername !== 'string') rawUsername = '';
+            rawUsername = rawUsername.trim();
+
+            const displayUsername = rawUsername.length > 0 && /^[a-zA-Z0-9@._-]+$/.test(rawUsername)
+              ? rawUsername.toLowerCase()
+              : 'Użytkownik';
             const msg3 = await bot.sendMessage(
               chatId,
               `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
@@ -844,7 +848,7 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       return;
     }
 
-    const displayUsername = shift.username || 'Użytkownik'; // Проверка на undefined
+    const displayUsername = shift.username || 'Użytkownik';
     let notificationSent = false;
     try {
       await bot.sendMessage(shift.chat_id,
@@ -900,7 +904,7 @@ setInterval(() => {
       logger.error('Błąd pingu:', err.message);
     });
   }
-}, 14 * 60 * 1000); // 14 минут = 840000 мс
+}, 14 * 60 * 1000);
 
 app.get('/', (_, res) => res.send('Bot is running'));
 app.listen(PORT, () => {

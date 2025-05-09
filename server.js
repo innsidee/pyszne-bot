@@ -386,7 +386,7 @@ const ADMIN_CHAT_ID = 606154517;
 
 bot.onText(/\/broadcast/, async (msg) => {
   const chatId = msg.chat.id;
-  if (chatId !== 606154517) {
+  if (chatId !== ADMIN_CHAT_ID) { 
     await bot.sendMessage(chatId, 'Nie masz uprawnień do tej komendy.', mainKeyboard);
     logger.info(`Nieautoryzowana próba użycia /broadcast przez ${chatId}`);
     return;

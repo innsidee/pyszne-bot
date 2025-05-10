@@ -374,13 +374,24 @@ async function updateStats(userId, field, increment = 1) {
 async function sendBroadcast(chatId, message) {
   try {
     const users = new Set();
-const tablesWithUserId = ['subscriptions', 'stats', 'shift_confirmations'];
-for (const table of tablesWithUserId) {
-  const rows = await db.all(`SELECT DISTINCT user_id FROM ${table}`);
-  rows.forEach(row => users.add(row.user_id));
-}
-const shiftRows = await db.all(`SELECT DISTINCT chat_id FROM shifts WHERE chat_id IS NOT NULL`);
-shiftRows.forEach(row => users.add(row.chat_id));
+
+    // Subscriptions i stats zawierają user_id
+    const tablesWithUserId = ['subscriptions', 'stats'];
+    for (const table of tablesWithUserId) {
+      const rows = await db.all(`SELECT DISTINCT user_id FROM ${table}`);
+      rows.forEach(row => users.add(row.user_id));
+    }
+
+    // shifts zawiera chat_id
+    const shiftRows = await db.all(`SELECT DISTINCT chat_id FROM shifts WHERE chat_id IS NOT NULL`);
+    shiftRows.forEach(row => users.add(row.chat_id));
+
+    // shift_confirmations zawiera giver_chat_id i taker_chat_id
+    const confirmations = await db.all(`SELECT DISTINCT giver_chat_id, taker_chat_id FROM shift_confirmations`);
+    confirmations.forEach(row => {
+      if (row.giver_chat_id) users.add(row.giver_chat_id);
+      if (row.taker_chat_id) users.add(row.taker_chat_id);
+    });
 
     if (users.size === 0) {
       await bot.sendMessage(chatId, 'Nie ma żadnych użytkowników do powiadomienia.', mainKeyboard);
@@ -396,6 +407,7 @@ shiftRows.forEach(row => users.add(row.chat_id));
       }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
+
     await bot.sendMessage(chatId, 'Wiadomość została rozesłana do wszystkich użytkowników.', mainKeyboard);
   } catch (error) {
     logger.error(`Błąd podczas wysyłania broadcast: ${error.message}`);

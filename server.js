@@ -374,11 +374,13 @@ async function updateStats(userId, field, increment = 1) {
 async function sendBroadcast(chatId, message) {
   try {
     const users = new Set();
-    const tables = ['shifts', 'subscriptions', 'stats', 'shift_confirmations'];
-    for (const table of tables) {
-      const rows = await db.all(`SELECT DISTINCT chat_id FROM ${table} WHERE chat_id IS NOT NULL`);
-      rows.forEach(row => users.add(row.chat_id));
-    }
+const tablesWithUserId = ['subscriptions', 'stats', 'shift_confirmations'];
+for (const table of tablesWithUserId) {
+  const rows = await db.all(`SELECT DISTINCT user_id FROM ${table}`);
+  rows.forEach(row => users.add(row.user_id));
+}
+const shiftRows = await db.all(`SELECT DISTINCT chat_id FROM shifts WHERE chat_id IS NOT NULL`);
+shiftRows.forEach(row => users.add(row.chat_id));
 
     if (users.size === 0) {
       await bot.sendMessage(chatId, 'Nie ma żadnych użytkowników do powiadomienia.', mainKeyboard);

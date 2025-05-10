@@ -3,7 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
-const moment = require('moment');
+const moment = require('moment-timezone');
 const winston = require('winston');
 moment.locale('pl');
 

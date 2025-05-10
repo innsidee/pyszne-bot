@@ -640,50 +640,50 @@ bot.on('message', async (msg) => {
       }
 
       if (sess.date && !sess.time) {
-        const time = parseTime(text);
-        if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
-        sess.time = time;
+  const time = parseTime(text);
+  if (!time) return await sendErr(chatId, sess, 'Zły format godzin. Napisz np. 11:00-19:00');
+  sess.time = time;
 
-        const existingShift = await db.get(
-          `SELECT id FROM shifts WHERE username = $1 AND date = $2 AND time = $3 AND strefa = $4`,
-          [username, sess.date, sess.time, sess.strefa]
-        );
-        if (existingShift) {
-          const errMsg = await bot.sendMessage(chatId, 'Już oddałeś taką zmianę! Nie możesz oddać tej samej zmiany ponownie.', mainKeyboard);
-          sess.messagesToDelete.push(errMsg.message_id);
-          logger.info(`Użytkownik ${chatId} próbował oddać duplikat zmiany: ${sess.date}, ${sess.time}, ${sess.strefa}`);
-          clearSession(chatId);
-          return;
-        }
+  const existingShift = await db.get(
+    `SELECT id FROM shifts WHERE username = $1 AND date = $2 AND time = $3 AND strefa = $4`,
+    [username, sess.date, sess.time, sess.strefa]
+  );
+  if (existingShift) {
+    const errMsg = await bot.sendMessage(chatId, 'Już oddałeś taką zmianę! Nie możesz oddać tej samej zmiany ponownie.', mainKeyboard);
+    sess.messagesToDelete.push(errMsg.message_id);
+    logger.info(`Użytkownik ${chatId} próbował oddać duplikat zmiany: ${sess.date}, ${sess.time}, ${sess.strefa}`);
+    clearSession(chatId);
+    return;
+  }
 
-        try {
-          await db.run(
-            `INSERT INTO shifts (username, chat_id, date, time, strefa, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-            [username, chatId, sess.date, sess.time, sess.strefa, moment().tz('Europe/Warsaw').format()]
-          );
-          const shiftId = (await db.get(`SELECT last_insert_rowid() AS id`)).id;
-          const shift = {
-            id: shiftId,
-            username,
-            chat_id: chatId,
-            date: sess.date,
-            time: sess.time,
-            strefa: sess.strefa,
-            created_at: moment().tz('Europe/Warsaw').format(),
-          };
+  try {
+    const result = await db.get(
+      `INSERT INTO shifts (username, chat_id, date, time, strefa, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [username, chatId, sess.date, sess.time, sess.strefa, moment().tz('Europe/Warsaw').format()]
+    );
+    const shiftId = result.id;
+    const shift = {
+      id: shiftId,
+      username,
+      chat_id: chatId,
+      date: sess.date,
+      time: sess.time,
+      strefa: sess.strefa,
+      created_at: moment().tz('Europe/Warsaw').format(),
+    };
 
-          await updateStats(chatId, 'shifts_given', 1);
-          logger.info(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}, chatId: ${chatId}`);
-          await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`, mainKeyboard);
-          await notifySubscribers(sess.strefa, sess.date, sess.time, username, chatId);
-        } catch (error) {
-          logger.error(`Błąd podczas zapisywania zmiany dla ${chatId}: ${error.message}`);
-          await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania zmiany.', mainKeyboard);
-        } finally {
-          clearSession(chatId);
-        }
-        return;
-      }
+    await updateStats(chatId, 'shifts_given', 1);
+    logger.info(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}, chatId: ${chatId}`);
+    await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`, mainKeyboard);
+    await notifySubscribers(sess.strefa, sess.date, sess.time, username, chatId);
+  } catch (error) {
+    logger.error(`Błąd podczas zapisywania zmiany dla ${chatId}: ${error.message}`);
+    await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania zmiany.', mainKeyboard);
+  } finally {
+    clearSession(chatId);
+  }
+  return;
+}
     }
 
     if (sess.mode === 'setprofile') {

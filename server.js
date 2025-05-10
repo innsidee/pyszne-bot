@@ -269,7 +269,7 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
   }
 }
 
-async function sendReminder(shift) {
+async function sendReminder(shift, timeLabel) {
   const shiftId = shift.id;
   const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
   if (shiftStart.isAfter(moment())) {
@@ -280,17 +280,19 @@ async function sendReminder(shift) {
         if (sub.user_id !== shift.chat_id) {
           setTimeout(async () => {
             try {
-              await bot.sendMessage(sub.user_id, `Przypomnienie: Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`);
-              logger.info(`Wysłano przypomnienie o zmianie ID ${shiftId} do ${sub.user_id}`);
+              await bot.sendMessage(
+                sub.user_id,
+                `Przypomnienie (${timeLabel} przed): Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`
+              );
+              logger.info(`Wysłano przypomnienie (${timeLabel}) o zmianie ID ${shiftId} do ${sub.user_id}`);
             } catch (err) {
-              logger.error(`Błąd wysyłania przypomnienia do ${sub.user_id}: ${err.message}`);
+              logger.error(`Błąd wysyłania przypomnienia (${timeLabel}) do ${sub.user_id}: ${err.message}`);
             }
           }, i * 100);
         }
       }
-      lastReminderTimes.set(shiftId, moment());
     } catch (error) {
-      logger.error(`Błąd podczas wysyłania przypomnienia dla zmiany ID ${shiftId}: ${error.message}`);
+      logger.error(`Błąd podczas wysyłania przypomnienia (${timeLabel}) dla zmiany ID ${shiftId}: ${error.message}`);
     }
   }
 }
@@ -303,28 +305,29 @@ async function cleanExpiredShifts() {
       const createdAt = moment(shift.created_at);
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
 
-      // Удаление если смена уже началась или истек срок жизни
-if (shiftStart.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
-  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-  logger.info(`Usunięto zmianę ID ${shift.id} - rozpoczęła się lub wygasła`);
-  lastReminderTimes.delete(shift.id);
-  continue;
-}
+      // Удаление, если смена уже началась
+      if (shiftStart.isSameOrBefore(now)) {
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+        logger.info(`Usunięto zmianę ID ${shift.id} - уже началась`);
+        lastReminderTimes.delete(shift.id);
+        continue;
+      }
 
-const shiftEnd = moment(`${shift.date} ${shift.time.split('-')[1]}`, 'DD.MM.YYYY HH:mm');
-if (shiftEnd.isSameOrBefore(now) || now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
-  await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-  logger.info(`Usunięto zmianę ID ${shift.id} - zakończyła się lub wygasła`);
-  lastReminderTimes.delete(shift.id);
-  continue;
-}
+      // Удаление, если истёк срок жизни (168 часов)
+      if (now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
+        logger.info(`Usunięto zmianę ID ${shift.id} - wygasła`);
+        lastReminderTimes.delete(shift.id);
+        continue;
+      }
 
-      // Напоминание ровно за час перед началом смены
+      // Напоминание за 2 часа до начала смены
       const minutesToStart = shiftStart.diff(now, 'minutes');
-     if (minutesToStart <= 120 && minutesToStart > 115) { // Okno 5 minut
-  await sendReminder(shift);
-  continue;
-}
+      if (minutesToStart <= 120 && minutesToStart > 115 && !lastReminderTimes.get(`${shift.id}_2h`)) {
+        await sendReminder(shift, '2 godziny');
+        lastReminderTimes.set(`${shift.id}_2h`, moment());
+        continue;
+      }
     }
   } catch (error) {
     logger.error(`Błąd podczas czyszczenia wygasłych zmian: ${error.message}`);

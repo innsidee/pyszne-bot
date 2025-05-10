@@ -4,6 +4,7 @@ const axios = require('axios');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
 const moment = require('moment-timezone');
+moment.locale('pl');
 const winston = require('winston');
 moment.locale('pl');
 
@@ -269,10 +270,13 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
   }
 }
 
+const moment = require('moment-timezone');
+moment.locale('pl');
+
 async function sendReminder(shift, timeLabel) {
   const shiftId = shift.id;
-  const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-  const now = moment();
+  const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
+  const now = moment.tz('Europe/Warsaw');
   logger.info(`Próba wysłania przypomnienia (${timeLabel}) dla zmiany ID ${shiftId}: shiftStart=${shiftStart.format()}, now=${now.format()}`);
   
   if (shiftStart.isAfter(now)) {
@@ -292,7 +296,7 @@ async function sendReminder(shift, timeLabel) {
             } catch (err) {
               logger.error(`Błąd wysyłania przypomnienia (${timeLabel}) do ${sub.user_id}: ${err.message}`);
             }
-          }, i * 200); // Увеличиваем задержку до 200 мс, чтобы избежать лимитов Telegram
+          }, i * 200);
         }
       }
     } catch (error) {
@@ -306,12 +310,12 @@ async function sendReminder(shift, timeLabel) {
 async function cleanExpiredShifts() {
   try {
     const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa, created_at FROM shifts`);
-    const now = moment().tz('Europe/Warsaw'); // Устанавливаем часовой пояс для Польши
+    const now = moment.tz('Europe/Warsaw');
     logger.info(`Uruchomiono cleanExpiredShifts, aktualny czas: ${now.format()}`);
 
     for (const shift of shifts) {
-      const createdAt = moment(shift.created_at);
-      const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm').tz('Europe/Warsaw');
+      const createdAt = moment.tz(shift.created_at, 'Europe/Warsaw');
+      const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
       logger.info(`Sprawdzam zmianę ID ${shift.id}: shiftStart=${shiftStart.format()}, now=${now.format()}`);
 
       // Удаление, если смена уже началась
@@ -339,7 +343,15 @@ async function cleanExpiredShifts() {
       logger.info(`Zmiana ID ${shift.id}: minutesToStart=${minutesToStart}, klucz 2h=${lastReminderTimes.get(`${shift.id}_2h`)}`);
       if (minutesToStart <= 120 && minutesToStart > 110 && !lastReminderTimes.get(`${shift.id}_2h`)) {
         await sendReminder(shift, '2 godziny');
-        lastReminderTimes.set(`${shift.id}_2h`, moment());
+        lastReminderTimes.set(`${shift.id}_2h`, moment.tz('Europe/Warsaw'));
+        continue;
+      }
+
+      // Напоминание за 1 час до начала смены
+      logger.info(`Zmiana ID ${shift.id}: minutesToStart=${minutesToStart}, klucz 1h=${lastReminderTimes.get(`${shift.id}_1h`)}`);
+      if (minutesToStart <= 60 && minutesToStart > 50 && !lastReminderTimes.get(`${shift.id}_1h`)) {
+        await sendReminder(shift, '1 godzinę');
+        lastReminderTimes.set(`${shift.id}_1h`, moment.tz('Europe/Warsaw'));
         continue;
       }
     }

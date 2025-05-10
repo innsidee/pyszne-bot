@@ -266,10 +266,10 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
       }
     }
   } catch (error) {
-    logger.error('Błąd podczas powiadamiania subskrybentów:', error.
-
+      } catch (error) {
+    logger.error('Błąd podczas powiadamiania subskrybentów:', error.message);
+  }
 }
-
 async function sendReminder(shift, timeLabel) {
   const shiftId = shift.id;
   const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');

@@ -266,7 +266,6 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
       }
     }
   } catch (error) {
-      } catch (error) {
     logger.error('Błąd podczas powiadamiania subskrybentów:', error.message);
   }
 }

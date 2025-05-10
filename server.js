@@ -266,12 +266,7 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
       }
     }
   } catch (error) {
-    logger.error('Błąd podczas powiadamiania subskrybentów:', error.message);
-  }
-}
-
-const moment = require('moment-timezone');
-moment.locale('pl');
+    logger.error('Błąd podczas powiadamiania subskrybentów:', error.
 
 async function sendReminder(shift, timeLabel) {
   const shiftId = shift.id;

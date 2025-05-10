@@ -6,7 +6,6 @@ const { Pool } = require('pg');
 const moment = require('moment-timezone');
 moment.locale('pl');
 const winston = require('winston');
-moment.locale('pl');
 
 dotenv.config();
 const token = process.env.TELEGRAM_TOKEN;
@@ -96,6 +95,9 @@ const LAST_COMMAND_TIMEOUT = 5 * 60 * 1000;
 const SHIFT_EXPIRY_HOURS = 168;
 const lastCommand = {};
 const lastReminderTimes = new Map();
+
+lastReminderTimes.clear(); // Сброс при старте
+logger.info('Wyczyszczono lastReminderTimes na starcie');
 
 const ADMIN_CHAT_ID = 606154517;
 const mainKeyboard = {
@@ -232,14 +234,7 @@ function parseTime(text) {
   const match = text.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
   if (match) {
     const [_, startHour, startMinute, endHour, endMinute] = match;
-    const startTotalMinutes = parseInt(startHour) * 60 + parseInt(startMinute);
-    const endTotalMinutes = parseInt(endHour) * 60 + parseInt(endMinute);
-
-if (match) {
-  const [_, startHour, startMinute, endHour, endMinute] = match;
-  return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
-}
-
+    return `${startHour}:${startMinute}-${endHour}:${endMinute}`;
   }
   return null;
 }
@@ -269,6 +264,7 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
     logger.error('Błąd podczas powiadamiania subskrybentów:', error.message);
   }
 }
+
 async function sendReminder(shift, timeLabel) {
   const shiftId = shift.id;
   const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
@@ -278,28 +274,41 @@ async function sendReminder(shift, timeLabel) {
   if (shiftStart.isAfter(now)) {
     try {
       const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [shift.strefa]);
-      logger.info(`Znaleziono ${subscribers.length} subskrybentów dla strefy ${shift.strefa}`);
+      logger.info(`Znaleziono ${subscribers.length} subskrybentów dla strefy ${shift.strefa} dla zmiany ID ${shiftId}`);
+      if (subscribers.length === 0) {
+        logger.info(`Brak subskrybentów w strefie ${shift.strefa} dla zmiany ID ${shiftId}`);
+        return;
+      }
+
+      let sentCount = 0;
       for (let i = 0; i < subscribers.length; i++) {
         const sub = subscribers[i];
         if (sub.user_id !== shift.chat_id) {
-          setTimeout(async () => {
-            try {
-              await bot.sendMessage(
-                sub.user_id,
-                `Przypomnienie (${timeLabel} przed): Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`
-              );
-              logger.info(`Wysłano przypomnienie (${timeLabel}) o zmianie ID ${shiftId} do ${sub.user_id}`);
-            } catch (err) {
-              logger.error(`Błąd wysyłania przypomnienia (${timeLabel}) do ${sub.user_id}: ${err.message}`);
-            }
-          }, i * 200);
+          logger.info(`Wysyłam przypomnienie (${timeLabel}) do ${sub.user_id} dla zmiany ID ${shiftId}`);
+          try {
+            await bot.sendMessage(
+              sub.user_id,
+              `Przypomnienie (${timeLabel} przed): Zmiana w strefie (${shift.strefa}) wciąż dostępna! ${shift.date}, ${shift.time} (od @${shift.username})`
+            );
+            logger.info(`Wysłano przypomnienie (${timeLabel}) o zmianie ID ${shiftId} do ${sub.user_id}`);
+            sentCount++;
+          } catch (err) {
+            logger.error(`Błąd wysyłania przypomnienia (${timeLabel}) do ${sub.user_id}: ${err.message}`);
+          }
+        } else {
+          logger.info(`Pomijam subskrybenta ${sub.user_id}, bo to autor zmiany ID ${shiftId}`);
         }
+      }
+      if (sentCount > 0) {
+        logger.info(`Wysłano przypomnienia (${timeLabel}) dla ${sentCount} subskrybentów zmiany ID ${shiftId}`);
+      } else {
+        logger.info(`Nie wysłano żadnych przypomnień (${timeLabel}) dla zmiany ID ${shiftId}`);
       }
     } catch (error) {
       logger.error(`Błąd podczas wysyłania przypomnienia (${timeLabel}) dla zmiany ID ${shiftId}: ${error.message}`);
     }
   } else {
-    logger.info(`Przypomnienie (${timeLabel}) dla zmiany ID ${shiftId} nie wysłane: sмена уже началась`);
+    logger.info(`Przypomnienie (${timeLabel}) dla zmiany ID ${shiftId} nie wysłane: sмена już началась`);
   }
 }
 
@@ -320,7 +329,6 @@ async function cleanExpiredShifts() {
         logger.info(`Usunięto zmianę ID ${shift.id} - уже началась`);
         lastReminderTimes.delete(shift.id);
         lastReminderTimes.delete(`${shift.id}_2h`);
-        lastReminderTimes.delete(`${shift.id}_1h`);
         continue;
       }
 
@@ -330,24 +338,15 @@ async function cleanExpiredShifts() {
         logger.info(`Usunięto zmianę ID ${shift.id} - wygasła`);
         lastReminderTimes.delete(shift.id);
         lastReminderTimes.delete(`${shift.id}_2h`);
-        lastReminderTimes.delete(`${shift.id}_1h`);
         continue;
       }
 
       // Напоминание за 2 часа до начала смены
       const minutesToStart = shiftStart.diff(now, 'minutes');
-      logger.info(`Zmiana ID ${shift.id}: minutesToStart=${minutesToStart}, klucz 2h=${lastReminderTimes.get(`${shift.id}_2h`)}`);
-      if (minutesToStart <= 120 && minutesToStart > 110 && !lastReminderTimes.get(`${shift.id}_2h`)) {
+      logger.info(`Zmiana ID ${shift.id}: minutesToStart=${minutesToStart}, klucz 2h=${lastReminderTimes.get(`${shift.id}_2h`) || 'undefined'}`);
+      if (minutesToStart <= 120 && minutesToStart > 100 && !lastReminderTimes.get(`${shift.id}_2h`)) {
         await sendReminder(shift, '2 godziny');
         lastReminderTimes.set(`${shift.id}_2h`, moment.tz('Europe/Warsaw'));
-        continue;
-      }
-
-      // Напоминание за 1 час до начала смены
-      logger.info(`Zmiana ID ${shift.id}: minutesToStart=${minutesToStart}, klucz 1h=${lastReminderTimes.get(`${shift.id}_1h`)}`);
-      if (minutesToStart <= 60 && minutesToStart > 50 && !lastReminderTimes.get(`${shift.id}_1h`)) {
-        await sendReminder(shift, '1 godzinę');
-        lastReminderTimes.set(`${shift.id}_1h`, moment.tz('Europe/Warsaw'));
         continue;
       }
     }
@@ -658,8 +657,21 @@ bot.on('message', async (msg) => {
         }
 
         try {
-          await db.run(`INSERT INTO shifts (username, chat_id, date, time, strefa) VALUES ($1, $2, $3, $4, $5)`,
-            [username, chatId, sess.date, sess.time, sess.strefa]);
+          await db.run(
+            `INSERT INTO shifts (username, chat_id, date, time, strefa, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [username, chatId, sess.date, sess.time, sess.strefa, moment().tz('Europe/Warsaw').format()]
+          );
+          const shiftId = (await db.get(`SELECT last_insert_rowid() AS id`)).id;
+          const shift = {
+            id: shiftId,
+            username,
+            chat_id: chatId,
+            date: sess.date,
+            time: sess.time,
+            strefa: sess.strefa,
+            created_at: moment().tz('Europe/Warsaw').format(),
+          };
+
           await updateStats(chatId, 'shifts_given', 1);
           logger.info(`Dodano zmianę: ${sess.date}, ${sess.time}, ${sess.strefa}, użytkownik: @${username}, chatId: ${chatId}`);
           await bot.sendMessage(chatId, `Zapisano: ${sess.date}, ${sess.time}, ${sess.strefa}`, mainKeyboard);
@@ -809,8 +821,8 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
 
     let notificationSent = false;
     try {
-     await bot.sendMessage(shift.chat_id,
-  `${profile.first_name} ${profile.last_name} ${profile.courier_id} zabiera zmianę (${shift.strefa}, ${shift.time}, ${shift.date})`);
+      await bot.sendMessage(shift.chat_id,
+        `${profile.first_name} ${profile.last_name} ${profile.courier_id} zabiera zmianę (${shift.strefa}, ${shift.time}, ${shift.date})`);
       logger.info(`Wiadomość wysłana do chatId ${shift.chat_id} (@${shift.username})`);
       notificationSent = true;
 

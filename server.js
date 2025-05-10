@@ -298,34 +298,46 @@ async function sendReminder(shift, timeLabel) {
 }
 
 async function cleanExpiredShifts() {
+  logger.info('Start cleanExpiredShifts');
+
   try {
     const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa, created_at FROM shifts`);
     const now = moment();
     for (const shift of shifts) {
+      logger.info(`Checking shift ID ${shift.id}: ${shift.date} ${shift.time}`);
+
       const createdAt = moment(shift.created_at);
       const shiftStart = moment(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+      const shiftEnd = moment(`${shift.date} ${shift.time.split('-')[1]}`, 'DD.MM.YYYY HH:mm');
 
-      // Удаление, если смена уже началась
       if (shiftStart.isSameOrBefore(now)) {
+        logger.info(`Deleting shift ID ${shift.id} - already started`);
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-        logger.info(`Usunięto zmianę ID ${shift.id} - уже началась`);
         lastReminderTimes.delete(shift.id);
         continue;
       }
 
-      // Удаление, если истёк срок жизни (168 часов)
       if (now.diff(createdAt, 'hours') >= SHIFT_EXPIRY_HOURS) {
+        logger.info(`Deleting shift ID ${shift.id} - expired`);
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
-        logger.info(`Usunięto zmianę ID ${shift.id} - wygasła`);
         lastReminderTimes.delete(shift.id);
         continue;
       }
 
-      // Напоминание за 2 часа до начала смены
       const minutesToStart = shiftStart.diff(now, 'minutes');
+      logger.info(`Shift ID ${shift.id} starts in ${minutesToStart} minutes`);
+
       if (minutesToStart <= 120 && minutesToStart > 115 && !lastReminderTimes.get(`${shift.id}_2h`)) {
+        logger.info(`Sending 2h reminder for shift ID ${shift.id}`);
         await sendReminder(shift, '2 godziny');
         lastReminderTimes.set(`${shift.id}_2h`, moment());
+        continue;
+      }
+
+      if (minutesToStart <= 60 && minutesToStart > 55 && !lastReminderTimes.get(`${shift.id}_1h`)) {
+        logger.info(`Sending 1h reminder for shift ID ${shift.id}`);
+        await sendReminder(shift, '1 godzinę');
+        lastReminderTimes.set(`${shift.id}_1h`, moment());
         continue;
       }
     }

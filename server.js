@@ -135,9 +135,9 @@ function getDateInlineKeyboard() {
   return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: 'Сегодня', callback_data: 'date_dzisiaj' }],
-        [{ text: 'Завтра', callback_data: 'date_jutro' }],
-        [{ text: 'Назад', callback_data: 'back_to_menu' }],
+        [{ text: 'Dzisiaj', callback_data: 'date_dzisiaj' }],
+        [{ text: 'Jutro', callback_data: 'date_jutro' }],
+        [{ text: 'Powrót', callback_data: 'back_to_menu' }],
       ],
     },
   };
@@ -157,7 +157,7 @@ function getTimeInlineKeyboard() {
         times.slice(0, 4),
         times.slice(4, 8),
         times.slice(8, 12),
-        [{ text: 'Назад', callback_data: 'back_to_date' }],
+        [{ text: 'Powrót', callback_data: 'back_to_date' }],
       ],
     },
   };
@@ -816,7 +816,7 @@ bot.on('callback_query', async (query) => {
               inlineKeyboard.push([{ text: `Przejmuję zmianę ID ${row.id}`, callback_data: `take_${row.id}_${row.chat_id}` }]);
             }
           }
-          inlineKeyboard.push([{ text: 'Назад', callback_data: 'back_to_menu' }]);
+          inlineKeyboard.push([{ text: 'Powrót', callback_data: 'back_to_menu' }]);
           await bot.editMessageText(messageText, {
             chat_id: chatId,
             message_id: messageId,

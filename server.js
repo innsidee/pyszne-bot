@@ -1053,6 +1053,7 @@ bot.on('callback_query', async (query) => {
 }
       logger.info(`Użytkownik ${chatId} wybrał zmianę ${shiftId} do edycji, tryb: ${sess.mode}`);
     } else if (data.startsWith('edit_strefa_')) {
+      try {
       const shiftId = data.split('_')[2];
       sess.mode = 'edit_strefa';
       sess.shiftId = shiftId;

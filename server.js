@@ -1076,72 +1076,68 @@ bot.on('callback_query', async (query) => {
     logger.info(`Użytkownik ${chatId} rozpoczął edytowanie czasu dla zmiany ${shiftId}, tryb: ${sess.mode}`);
   }
     } else if (data.startsWith('filter_')) {
-      const [_, filterType, filterValue, strefa] = data.split('_');
-      try {
-        let rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
-        const now = moment();
+  const [_, filterType, filterValue, strefa] = data.split('_');
+  try {
+    let rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
+    const now = moment();
 
-        
+    if (filterType === 'all') {
+      // Nie filtrujemy nic, bo chcemy wszystkie zmiany
+    } else if (filterType === 'date') {
+      const today = moment().startOf('day');
+      const tomorrow = moment().add(1, 'day').startOf('day');
+      rows = rows.filter(row => {
+        const shiftDate = moment(row.date, 'DD.MM.YYYY');
+        if (filterValue === 'today') return shiftDate.isSame(today, 'day');
+        if (filterValue === 'tomorrow') return shiftDate.isSame(tomorrow, 'day');
+        return true;
+      });
+    } else if (filterType === 'time') {
+      rows = rows.filter(row => {
+        const startHour = parseInt(row.time.split('-')[0].split(':')[0]);
+        if (filterValue === 'morning') return startHour >= 6 && startHour < 12;
+        if (filterValue === 'afternoon') return startHour >= 12 && startHour < 18;
+        if (filterValue === 'evening') return startHour >= 18 && startHour < 24;
+        return true;
+      });
+    } else if (filterType === 'duration') {
+      if (filterValue === 'short') {
+        rows = rows.filter(row => {
+          const [start, end] = row.time.split('-');
+          const startTime = moment(start, 'HH:mm');
+          const endTime = moment(end, 'HH:mm');
+          const duration = endTime.diff(startTime, 'hours', true);
+          return duration < 6;
+        });
+      }
+    }
 
-        if (filterType === 'all') {
-  // Nie filtrujemy nic, bo chcemy wszystkie zmiany
-} else if (filterType === 'date') {
-  const today = moment().startOf('day');
-  const tomorrow = moment().add(1, 'day').startOf('day');
-  rows = rows.filter(row => {
-    const shiftDate = moment(row.date, 'DD.MM.YYYY');
-    if (filterValue === 'today') return shiftDate.isSame(today, 'day');
-    if (filterValue === 'tomorrow') return shiftDate.isSame(tomorrow, 'day');
-    return true;
-  });
-} else if (filterType === 'time') {
-  rows = rows.filter(row => {
-    const startHour = parseInt(row.time.split('-')[0].split(':')[0]);
-    if (filterValue === 'morning') return startHour >= 6 && startHour < 12;
-    if (filterValue === 'afternoon') return startHour >= 12 && startHour < 18;
-    if (filterValue === 'evening') return startHour >= 18 && startHour < 24;
-    return true;
-  });
-} else if (filterType === 'duration') {
-  if (filterValue === 'short') {
-    rows = rows.filter(row => {
-      const [start, end] = row.time.split('-');
-      const startTime = moment(start, 'HH:mm');
-      const endTime = moment(end, 'HH:mm');
-      const duration = endTime.diff(startTime, 'hours', true);
-      return duration < 6;
-    });
+    sess.viewedShifts = rows.map(row => row.id);
+
+    if (!rows.length) {
+      const msg = await bot.sendMessage(chatId, 'Brak dostępnych zmian po zastosowaniu filtra.', mainKeyboard);
+      sess.messagesToDelete.push(msg.message_id);
+      sess.viewedShifts = [];
+    } else {
+      for (const row of rows) {
+        const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+        if (shiftStart.isAfter(now)) {
+          const displayUsername = row.username || 'Użytkownik';
+          const msg = await bot.sendMessage(
+            chatId,
+            `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
+            { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
+          );
+          sess.messagesToDelete.push(msg.message_id);
+        }
+      }
+    }
+  } catch (err) {
+    logger.error(`Błąd podczas filtrowania zmian w strefie ${strefa}: ${err.message}`);
+    await bot.sendMessage(chatId, 'Wystąpił błąd podczas filtrowania zmian.', mainKeyboard);
+    clearSession(chatId);
   }
 }
-}
-
-        sess.viewedShifts = rows.map(row => row.id);
-
-        if (!rows.length) {
-          const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian po zastosowaniu filtra.', mainKeyboard);
-          sess.messagesToDelete.push(msg2.message_id);
-          logger.info(`Brak zmian po filtrze ${filterType}_${filterValue} w strefie ${strefa} dla ${chatId}`);
-          sess.viewedShifts = [];
-        } else {
-          for (const row of rows) {
-            const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
-            if (shiftStart.isAfter(now)) {
-              const displayUsername = row.username || 'Użytkownik';
-              const msg3 = await bot.sendMessage(
-                chatId,
-                `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
-                { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
-              );
-              sess.messagesToDelete.push(msg3.message_id);
-              logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
-            }
-          }
-        }
-      } catch (err) {
-        logger.error(`Błąd podczas filtrowania zmian w strefie ${strefa}: ${err.message}`);
-        await bot.sendMessage(chatId, 'Wystąpił błąd podczas filtrowania zmian.', mainKeyboard);
-        clearSession(chatId);
-      }
     } else if (data.startsWith('contact_')) {
       const [_, otherChatId, otherUsername] = data.split('_');
       sess.mode = 'contact';

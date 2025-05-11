@@ -1052,25 +1052,33 @@ bot.on('callback_query', async (query) => {
   });
 }
       logger.info(`Użytkownik ${chatId} wybrał zmianę ${shiftId} do edycji, tryb: ${sess.mode}`);
-    } else if (data.startsWith('edit_strefa_')) {
-  try {
+    try {
+  if (data.startsWith('edit_strefa_')) {
     const shiftId = data.split('_')[2];
     sess.mode = 'edit_strefa';
     sess.shiftId = shiftId;
     const message = await bot.sendMessage(chatId, 'Wybierz nową strefę:', zonesKeyboard);
     sess.messagesToDelete.push(message.message_id);
     logger.info(`Użytkownik ${chatId} rozpoczął edytowanie strefy dla zmiany ${shiftId}, tryb: ${sess.mode}`);
-  } catch (error) {
-    logger.error(`Błąd podczas edytowania strefy: ${error.message}`);
-    await bot.sendMessage(chatId, 'Wystąpił błąd podczas edycji strefy.', mainKeyboard);
+  } else if (data.startsWith('edit_date_')) {
+    const shiftId = data.split('_')[2];
+    sess.mode = 'edit_date';
+    sess.shiftId = shiftId;
+    const message = await bot.sendMessage(chatId, 'Wpisz nową datę:', returnKeyboard);
+    sess.messagesToDelete.push(message.message_id);
+    logger.info(`Użytkownik ${chatId} rozpoczął edytowanie daty dla zmiany ${shiftId}, tryb: ${sess.mode}`);
+  } else if (data.startsWith('edit_time_')) {
+    const shiftId = data.split('_')[2];
+    sess.mode = 'edit_time';
+    sess.shiftId = shiftId;
+    const message = await bot.sendMessage(chatId, 'Wpisz nowy czas:', returnKeyboard);
+    sess.messagesToDelete.push(message.message_id);
+    logger.info(`Użytkownik ${chatId} rozpoczął edytowanie czasu dla zmiany ${shiftId}, tryb: ${sess.mode}`);
   }
-} else if (data.startsWith('edit_date_')) {
-      const shiftId = data.split('_')[2];
-      sess.mode = 'edit_date';
-      sess.shiftId = shiftId;
-      const message = await bot.sendMessage(chatId, 'Wybierz nową datę (np. dzisiaj, jutro, 05.05.2025):', returnKeyboard);
-      sess.messagesToDelete.push(message.message_id);
-      logger.info(`Użytkownik ${chatId} rozpoczął edytowanie daty dla zmiany ${shiftId}, tryb: ${sess.mode}`);
+} catch (error) {
+  logger.error(`Błąd podczas edytowania: ${error.message}`);
+  await bot.sendMessage(chatId, 'Wystąpił błąd podczas edycji.', mainKeyboard);
+}
     } else if (data.startsWith('edit_time_')) {
       const shiftId = data.split('_')[2];
       sess.mode = 'edit_time';

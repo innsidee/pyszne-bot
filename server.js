@@ -214,10 +214,17 @@ function updateLastCommand(chatId) {
 
 async function checkLastCommand(chatId) {
   if (lastCommand[chatId] && Date.now() - lastCommand[chatId] > LAST_COMMAND_TIMEOUT) {
-    await bot.sendMessage(chatId, 'Minęło trochę czasu. Co chcesz zrobić?', mainKeyboard);
-clearSession(chatId);
-return false;
-  }
+  const message = await bot.sendMessage(chatId, 'Minęło trochę czasu. Chcesz kontynuować czy wrócić do menu?', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: 'Kontynuuj', callback_data: 'continue_last' }],
+        [{ text: 'Menu główne', callback_data: 'back_to_menu' }]
+      ]
+    }
+  });
+  session[chatId].messagesToDelete.push(message.message_id);
+  return false;
+}
   return true;
 }
 
@@ -1093,15 +1100,18 @@ bot.on('callback_query', async (query) => {
         }
 
         if (filterType === 'duration') {
-          rows = rows.filter(row => {
-            const [start, end] = row.time.split('-');
-            const startTime = moment(start, 'HH:mm');
-            const endTime = moment(end, 'HH:mm');
-            const duration = endTime.diff(startTime, 'hours', true);
-            if (filterValue === 'short') return duration < 6;
-            return true;
-          });
-        }
+  if (filterValue === 'short') {
+    rows = rows.filter(row => {
+      const [start, end] = row.time.split('-');
+      const startTime = moment(start, 'HH:mm');
+      const endTime = moment(end, 'HH:mm');
+      const duration = endTime.diff(startTime, 'hours', true);
+      return duration < 6;
+    });
+  } else if (filterValue === 'all') {
+    rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
+  }
+}
 
         sess.viewedShifts = rows.map(row => row.id);
 

@@ -189,9 +189,9 @@ async function clearSession(chatId) {
   if (!sess) return;
 
   if (sess?.messagesToDelete) {
-    const messagesToKeep = sess.viewedShifts ? sess.messagesToDelete.filter(id => {
-      return !sess.messagesToDelete.some(msgId => msgId === id && sess.viewedShifts.some(shiftId => shiftId.toString().includes(id.toString())));
-    }) : sess.messagesToDelete;
+    const messagesToKeep = sess.viewedShifts
+  ? sess.messagesToDelete.filter(id => !sess.viewedShifts.includes(id))
+  : sess.messagesToDelete;
 
     for (const id of messagesToKeep) {
       await bot.deleteMessage(chatId, id).catch(() => {});
@@ -215,9 +215,8 @@ function updateLastCommand(chatId) {
 async function checkLastCommand(chatId) {
   if (lastCommand[chatId] && Date.now() - lastCommand[chatId] > LAST_COMMAND_TIMEOUT) {
     await bot.sendMessage(chatId, 'Minęło trochę czasu. Co chcesz zrobić?', mainKeyboard);
-    delete session[chatId];
-    delete lastCommand[chatId];
-    return false;
+clearSession(chatId);
+return false;
   }
   return true;
 }
@@ -274,10 +273,25 @@ async function notifySubscribers(strefa, date, time, username, chatId) {
   try {
     const subscribers = await db.all(`SELECT user_id FROM subscriptions WHERE strefa = $1`, [strefa]);
     const shiftStart = moment(`${date} ${time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+    const dayOfWeek = shiftStart.day();
+    const hour = shiftStart.hour();
 
     for (let i = 0; i < subscribers.length; i++) {
       const sub = subscribers[i];
-      if (sub.user_id !== chatId && shiftStart.isAfter(moment())) {
+      if (sub.user_id === chatId) continue;
+
+      const filters = await db.get(`SELECT * FROM notification_filters WHERE user_id = $1`, [sub.user_id]) || {};
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const minHour = filters.min_notification_hour || 0;
+
+      const shouldNotify =
+        (!filters.morning || (hour >= 6 && hour < 12)) &&
+        (!filters.afternoon || (hour >= 12 && hour < 18)) &&
+        (!filters.evening || (hour >= 18 && hour < 24)) &&
+        (!filters.weekend || isWeekend) &&
+        (hour >= minHour);
+
+      if (shouldNotify && shiftStart.isAfter(moment())) {
         setTimeout(async () => {
           await bot.sendMessage(sub.user_id, `Nowa zmiana w Twojej strefie (${strefa}): ${date}, ${time} (od @${username})`);
           logger.info(`Wysłano powiadomienie do ${sub.user_id}: Nowa zmiana w ${strefa}`);
@@ -347,19 +361,10 @@ async function cleanExpiredShifts() {
       const shiftStart = moment.tz(`${shift.date} ${shift.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm', 'Europe/Warsaw');
       logger.info(`Sprawdzam zmianę ID ${shift.id}: shiftStart=${shiftStart.format()}, now=${now.format()}`);
 
-      let isBeingViewed = false;
-      for (const chatId in session) {
-        const sess = session[chatId];
-        if (sess?.viewedShifts?.includes(shift.id)) {
-          isBeingViewed = true;
-          break;
-        }
-      }
-
-      if (isBeingViewed) {
-        logger.info(`Zmiana ID ${shift.id} jest wyświetlana użytkownikowi, pomijam usuwanie`);
-        continue;
-      }
+      if (Object.values(session).some(sess => sess?.viewedShifts?.includes(shift.id))) {
+  logger.info(`Zmiana ID ${shift.id} jest wyświetlana użytkownikowi, pomijam usuwanie`);
+  continue;
+}
 
       if (shiftStart.isSameOrBefore(now)) {
         await db.run(`DELETE FROM shifts WHERE id = $1`, [shift.id]);
@@ -396,6 +401,13 @@ async function updateStats(userId, field, increment = 1) {
       `INSERT INTO stats (user_id, shifts_given, shifts_taken, subscriptions) VALUES ($1, 0, 0, 0) ON CONFLICT (user_id) DO NOTHING`,
       [userId]
     );
+
+    const stats = await db.get(`SELECT ${field} FROM stats WHERE user_id = $1`, [userId]);
+    if (stats && stats[field] + increment < 0) {
+      logger.info(`Pominięto aktualizację statystyk, bo ${field} już jest na 0`);
+      return;
+    }
+
     await db.run(
       `UPDATE stats SET ${field} = ${field} + $1 WHERE user_id = $2`,
       [increment, userId]
@@ -417,8 +429,13 @@ async function sendBroadcast(chatId, message) {
     }
 
     const shiftRows = await db.all(`SELECT DISTINCT chat_id FROM shifts WHERE chat_id IS NOT NULL`);
-    shiftRows.forEach(row => users.add(row.chat_id));
+shiftRows.forEach(row => users.add(row.chat_id));
 
+const chatMessageRows = await db.all(`SELECT DISTINCT sender_chat_id, receiver_chat_id FROM chat_messages`);
+chatMessageRows.forEach(row => {
+  users.add(row.sender_chat_id);
+  users.add(row.receiver_chat_id);
+});
     if (users.size === 0) {
       await bot.sendMessage(chatId, 'Nie ma żadnych użytkowników do powiadomienia.', mainKeyboard);
       return;
@@ -476,12 +493,12 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       );
 
       if (notificationSent) {
-        await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
-        await updateStats(chatId, 'shifts_taken', 1);
-        await updateStats(giverChatId, 'shifts_given', -1);
-        await bot.sendMessage(chatId, `Przejęto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
-        logger.info(`Użytkownik ${chatId} przejął zmianę ID ${shiftId} od ${giverChatId}`);
-      }
+  await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
+  await updateStats(chatId, 'shifts_taken', 1);
+  await updateStats(shift.chat_id, 'shifts_given', -1);
+  await bot.sendMessage(chatId, `Przejęto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
+  logger.info(`Użytkownik ${chatId} przejął zmianę ID ${shiftId} od ${shift.chat_id}`);
+}
     } catch (error) {
       logger.error(`Błąd wysyłania powiadomienia dla ${shift.chat_id}: ${error.message}`);
       await bot.sendMessage(chatId, 'Wystąpił błąd podczas powiadamiania osoby oddającej zmianę.', mainKeyboard);

@@ -1075,45 +1075,34 @@ bot.on('callback_query', async (query) => {
     sess.messagesToDelete.push(message.message_id);
     logger.info(`Użytkownik ${chatId} rozpoczął edytowanie czasu dla zmiany ${shiftId}, tryb: ${sess.mode}`);
   }
-} catch (error) {
-  logger.error(`Błąd podczas edytowania: ${error.message}`);
-  await bot.sendMessage(chatId, 'Wystąpił błąd podczas edycji.', mainKeyboard);
-}
-    } else if (data.startsWith('edit_time_')) {
-      const shiftId = data.split('_')[2];
-      sess.mode = 'edit_time';
-      sess.shiftId = shiftId;
-      const message = await bot.sendMessage(chatId, 'Wpisz nowy czas (np. 11:00-19:00):', returnKeyboard);
-      sess.messagesToDelete.push(message.message_id);
-      logger.info(`Użytkownik ${chatId} rozpoczął edytowanie czasu dla zmiany ${shiftId}, tryb: ${sess.mode}`);
     } else if (data.startsWith('filter_')) {
       const [_, filterType, filterValue, strefa] = data.split('_');
       try {
         let rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
         const now = moment();
 
-        if (filterType === 'date') {
-          const today = moment().startOf('day');
-          const tomorrow = moment().add(1, 'day').startOf('day');
-          rows = rows.filter(row => {
-            const shiftDate = moment(row.date, 'DD.MM.YYYY');
-            if (filterValue === 'today') return shiftDate.isSame(today, 'day');
-            if (filterValue === 'tomorrow') return shiftDate.isSame(tomorrow, 'day');
-            return true;
-          });
-        }
+        
 
-        if (filterType === 'time') {
-          rows = rows.filter(row => {
-            const startHour = parseInt(row.time.split('-')[0].split(':')[0]);
-            if (filterValue === 'morning') return startHour >= 6 && startHour < 12;
-            if (filterValue === 'afternoon') return startHour >= 12 && startHour < 18;
-            if (filterValue === 'evening') return startHour >= 18 && startHour < 24;
-            return true;
-          });
-        }
-
-        if (filterType === 'duration') {
+        if (filterType === 'all') {
+  // Nie filtrujemy nic, bo chcemy wszystkie zmiany
+} else if (filterType === 'date') {
+  const today = moment().startOf('day');
+  const tomorrow = moment().add(1, 'day').startOf('day');
+  rows = rows.filter(row => {
+    const shiftDate = moment(row.date, 'DD.MM.YYYY');
+    if (filterValue === 'today') return shiftDate.isSame(today, 'day');
+    if (filterValue === 'tomorrow') return shiftDate.isSame(tomorrow, 'day');
+    return true;
+  });
+} else if (filterType === 'time') {
+  rows = rows.filter(row => {
+    const startHour = parseInt(row.time.split('-')[0].split(':')[0]);
+    if (filterValue === 'morning') return startHour >= 6 && startHour < 12;
+    if (filterValue === 'afternoon') return startHour >= 12 && startHour < 18;
+    if (filterValue === 'evening') return startHour >= 18 && startHour < 24;
+    return true;
+  });
+} else if (filterType === 'duration') {
   if (filterValue === 'short') {
     rows = rows.filter(row => {
       const [start, end] = row.time.split('-');
@@ -1122,9 +1111,8 @@ bot.on('callback_query', async (query) => {
       const duration = endTime.diff(startTime, 'hours', true);
       return duration < 6;
     });
-  } else if (filterValue === 'all') {
-    rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
   }
+}
 }
 
         sess.viewedShifts = rows.map(row => row.id);

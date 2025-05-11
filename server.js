@@ -1110,16 +1110,19 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
       logger.info(`Wiadomość wysłana do chatId ${shift.chat_id} (@${shift.username})`);
       notificationSent = true;
 
-      await bot.sendMessage(shift.chat_id,
+            await bot.sendMessage(shift.chat_id,
         `Musisz teraz zgłosić zmianę w formularzu Pyszne.pl.`,
         { 
           reply_markup: { 
             inline_keyboard: [
               [{ text: 'Wysłać formularz 📝', url: 'https://docs.google.com/forms/d/e/1FAIpQLSenjgRS5ik8m61MK1jab4k1p1AYisscQ5fDC6EsFf8BkGk1og/viewform' }],
-              [{ text: 'Skontaktuj się z przejmującym', callback_data: `contact_${chatId}_${takerUsername}` }],
-            }
+              [{ text: 'Skontaktuj się z przejmującym', callback_data: `contact_${chatId}_${takerUsername}` }]
+            ]
           }
-          if (notificationSent) {
+        }
+      );
+
+      if (notificationSent) {
   try {
     await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
     await updateStats(chatId, 'shifts_taken', 1);

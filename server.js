@@ -1036,20 +1036,21 @@ bot.on('callback_query', async (query) => {
       await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
       await bot.sendMessage(chatId, `Usunięto zmianę o ID ${shiftId}.`, mainKeyboard);
       logger.info(`Admin ${chatId} usunął zmianę ID ${shiftId}`);
-    } else if (data.startsWith('edit_')) {
-      const shiftId = data.split('_')[1];
-      sess.shiftId = shiftId;
-      sess.mode = 'edit_select';
-      await bot.sendMessage(chatId, 'Wybierz, co edytować:', {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: 'Strefa', callback_data: `edit_strefa_${shiftId}` }],
-            [{ text: 'Data', callback_data: `edit_date_${shiftId}` }],
-            [{ text: 'Czas', callback_data: `edit_time_${shiftId}` }],
-            [{ text: 'Powrót', callback_data: 'back_to_menu' }],
-          ],
-        },
-      });
+     } else if (data.startsWith('edit_') && !data.startsWith('edit_strefa_') && !data.startsWith('edit_date_') && !data.startsWith('edit_time_')) {
+  const shiftId = data.split('_')[1];
+  sess.shiftId = shiftId;
+  sess.mode = 'edit_select';
+  await bot.sendMessage(chatId, 'Wybierz, co edytować:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: 'Strefa', callback_data: `edit_strefa_${shiftId}` }],
+        [{ text: 'Data', callback_data: `edit_date_${shiftId}` }],
+        [{ text: 'Czas', callback_data: `edit_time_${shiftId}` }],
+        [{ text: 'Powrót', callback_data: 'back_to_menu' }],
+      ],
+    },
+  });
+}
       logger.info(`Użytkownik ${chatId} wybrał zmianę ${shiftId} do edycji, tryb: ${sess.mode}`);
     } else if (data.startsWith('edit_strefa_')) {
       const shiftId = data.split('_')[2];

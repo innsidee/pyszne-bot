@@ -1117,5 +1117,289 @@ async function handleTakeShift(chatId, shiftId, giverChatId, profile, takerUsern
             inline_keyboard: [
               [{ text: 'Wysłać formularz 📝', url: 'https://docs.google.com/forms/d/e/1FAIpQLSenjgRS5ik8m61MK1jab4k1p1AYisscQ5fDC6EsFf8BkGk1og/viewform' }],
               [{ text: 'Skontaktuj się z przejmującym', callback_data: `contact_${chatId}_${takerUsername}` }],
-            ]
+            }
           }
+          if (notificationSent) {
+  try {
+    await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
+    await updateStats(chatId, 'shifts_taken', 1);
+    await updateStats(giverChatId, 'shifts_given', -1);
+    await bot.sendMessage(chatId, `Przejęto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
+    logger.info(`Użytkownik ${chatId} przejął zmianę ID ${shiftId} od ${giverChatId}`);
+  } catch (error) {
+    logger.error(`Błąd podczas usuwania zmiany ${shiftId} po przejęciu: ${error.message}`);
+    await bot.sendMessage(chatId, 'Wystąpił błąd podczas zapisywania przejęcia zmiany.', mainKeyboard);
+  }
+}
+} catch (error) {
+  logger.error(`Błąd w handleTakeShift dla ${chatId}: ${error.message}`);
+  await bot.sendMessage(chatId, 'Wystąpił błąd podczas przejmowania zmiany.', mainKeyboard);
+}
+}
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+  const username = query.from.username || query.from.first_name || 'Użytkownik';
+  updateLastCommand(chatId);
+
+  if (!session[chatId]) {
+    session[chatId] = { lastActive: Date.now(), messagesToDelete: [], userMessages: [], userProfile: await getUserProfile(chatId) };
+  }
+
+  session[chatId] = { ...session[chatId], lastActive: Date.now(), messagesToDelete: session[chatId]?.messagesToDelete || [], userMessages: session[chatId]?.userMessages || [] };
+  const sess = session[chatId];
+
+  logger.info(`Użytkownik ${chatId} (@${username}) kliknął callback: ${data}`);
+
+  try {
+    if (data === 'subskrybuj') {
+      sess.mode = 'subskrypcja';
+      const message = await bot.sendMessage(chatId, 'Wybierz strefę:', {
+        reply_markup: {
+          inline_keyboard: STREFY.map(s => [{ text: s, callback_data: `sub_${s}` }]),
+        },
+      });
+      sess.messagesToDelete.push(message.message_id);
+      logger.info(`Użytkownik ${chatId} rozpoczął subskrypcję strefy`);
+    } else if (data === 'twoje_subskrypcje') {
+      logger.info(`Użytkownik ${chatId} wywołał Twoje subskrypcje`);
+      const subscriptions = await db.all(`SELECT strefa FROM subscriptions WHERE user_id = $1`, [chatId]);
+      if (!subscriptions.length) {
+        await bot.sendMessage(chatId, 'Nie subskrybujesz żadnych stref.', mainKeyboard);
+        logger.info(`Użytkownik ${chatId} nie ma subskrypcji`);
+        clearSession(chatId);
+        return;
+      }
+
+      const inlineKeyboard = subscriptions.map(sub => [
+        { text: sub.strefa, callback_data: `unsub_${sub.strefa}` },
+      ]);
+      inlineKeyboard.push([{ text: 'Powrót', callback_data: 'back_to_menu' }]);
+      await bot.sendMessage(chatId, 'Twoje subskrypcje (kliknij, aby odsubskrybować):', {
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
+      logger.info(`Wysłano listę subskrypcji użytkownikowi ${chatId}`);
+    } else if (data === 'back_to_menu') {
+      clearSession(chatId);
+      await bot.sendMessage(chatId, 'Cześć! Co chcesz zrobić?', mainKeyboard);
+      logger.info(`Użytkownik ${chatId} wrócił do menu głównego`);
+    } else if (data.startsWith('sub_')) {
+      const strefa = data.slice(4);
+      try {
+        await db.run(`INSERT INTO subscriptions (user_id, strefa) VALUES ($1, $2) ON CONFLICT (user_id, strefa) DO NOTHING`, [chatId, strefa]);
+        await updateStats(chatId, 'subscriptions', 1);
+        await bot.sendMessage(chatId, `Zapisano subskrypcję na: ${strefa}`, mainKeyboard);
+        logger.info(`Użytkownik ${chatId} zasubskrybował strefę: ${strefa}`);
+      } catch (error) {
+        logger.error(`Błąd podczas zapisu subskrypcji dla ${chatId}: ${error.message}`);
+        await bot.sendMessage(chatId, 'Już subskrybujesz tę strefę lub wystąpił inny błąd.', mainKeyboard);
+      } finally {
+        clearSession(chatId);
+      }
+    } else if (data.startsWith('unsub_')) {
+      const strefa = data.slice(6);
+      try {
+        await db.run(`DELETE FROM subscriptions WHERE user_id = $1 AND strefa = $2`, [chatId, strefa]);
+        await updateStats(chatId, 'subscriptions', -1);
+        await bot.sendMessage(chatId, `Odsubskrybowano strefę: ${strefa}`, mainKeyboard);
+        logger.info(`Użytkownik ${chatId} odsubskrybował strefę: ${strefa}`);
+      } catch (error) {
+        logger.error(`Błąd podczas odsubskrybowania strefy dla ${chatId}: ${error.message}`);
+        await bot.sendMessage(chatId, 'Wystąpił błąd podczas odsubskrybowania.', mainKeyboard);
+      }
+    } else if (data.startsWith('take_')) {
+      const [_, shiftId, giverChatId] = data.split('_');
+      const profile = session[chatId]?.userProfile || await getUserProfile(chatId);
+      if (!profile.first_name || !profile.last_name || !profile.courier_id) {
+        await bot.sendMessage(chatId, 'Najpierw ustaw swój profil, klikając „Ustaw profil”.', returnKeyboard);
+        await bot.answerCallbackQuery(query.id);
+        return;
+      }
+      session[chatId] = { mode: 'take', shiftId: parseInt(shiftId), giverChatId, messagesToDelete: [], userMessages: [], lastActive: Date.now(), userProfile: profile };
+      logger.info(`Użytkownik ${chatId} chce przejąć zmianę o ID: ${shiftId} z profilem: ${profile.first_name} ${profile.last_name}, ID: ${profile.courier_id}`);
+      await handleTakeShift(chatId, shiftId, giverChatId, profile, username);
+      clearSession(chatId);
+    } else if (data.startsWith('delete_shift_')) {
+      const shiftId = data.slice(13);
+      try {
+        const shift = await db.get(`SELECT date, time, strefa FROM shifts WHERE id = $1 AND chat_id = $2`, [shiftId, chatId]);
+        if (!shift) {
+          await bot.sendMessage(chatId, 'Nie znaleziono tej zmiany lub nie należy do Ciebie.', mainKeyboard);
+          logger.info(`Próba usunięcia nieistniejącej zmiany ${shiftId} przez ${chatId}`);
+          return;
+        }
+
+        await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
+        await updateStats(chatId, 'shifts_given', -1);
+        await bot.sendMessage(chatId, `Usunięto zmianę: ${shift.date}, ${shift.time}, ${shift.strefa}`, mainKeyboard);
+        logger.info(`Użytkownik ${chatId} usunął zmianę ID ${shiftId}`);
+      } catch (error) {
+        logger.error(`Błąd podczas usuwania zmiany ${shiftId} dla ${chatId}: ${error.message}`);
+        await bot.sendMessage(chatId, 'Wystąpił błąd podczas usuwania zmiany.', mainKeyboard);
+      }
+    } else if (data === 'admin_users') {
+      const users = await db.all(`
+        SELECT DISTINCT user_id FROM subscriptions
+        UNION
+        SELECT DISTINCT chat_id FROM shifts
+      `);
+      let messageText = 'Lista użytkowników:\n';
+      users.forEach((u, i) => messageText += `${i + 1}. ${u.user_id}\n`);
+      await bot.sendMessage(chatId, messageText || 'Brak użytkowników.', mainKeyboard);
+    } else if (data === 'admin_shifts') {
+      const shifts = await db.all(`SELECT id, username, chat_id, date, time, strefa FROM shifts`);
+      let messageText = 'Lista zmian:\n';
+      const inlineKeyboard = [];
+      shifts.forEach(shift => {
+        messageText += `ID: ${shift.id}, ${shift.date}, ${shift.time}, ${shift.strefa} (od @${shift.username})\n`;
+        inlineKeyboard.push([{ text: `Usuń zmianę ${shift.id}`, callback_data: `admin_delete_${shift.id}` }]);
+      });
+      inlineKeyboard.push([{ text: 'Powrót', callback_data: 'back_to_menu' }]);
+      await bot.sendMessage(chatId, messageText || 'Brak zmian.', {
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
+    } else if (data.startsWith('admin_delete_')) {
+      const shiftId = data.split('_')[2];
+      await db.run(`DELETE FROM shifts WHERE id = $1`, [shiftId]);
+      await bot.sendMessage(chatId, `Usunięto zmianę o ID ${shiftId}.`, mainKeyboard);
+      logger.info(`Admin ${chatId} usunął zmianę ID ${shiftId}`);
+    } else if (data.startsWith('edit_')) {
+      const shiftId = data.split('_')[1];
+      sess.shiftId = shiftId;
+      sess.mode = 'edit_select';
+      await bot.sendMessage(chatId, 'Wybierz, co edytować:', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Strefa', callback_data: `edit_strefa_${shiftId}` }],
+            [{ text: 'Data', callback_data: `edit_date_${shiftId}` }],
+            [{ text: 'Czas', callback_data: `edit_time_${shiftId}` }],
+            [{ text: 'Powrót', callback_data: 'back_to_menu' }],
+          ],
+        },
+      });
+      logger.info(`Użytkownik ${chatId} wybrał zmianę ${shiftId} do edycji, tryb: ${sess.mode}`);
+    } else if (data.startsWith('edit_strefa_')) {
+      const shiftId = data.split('_')[2];
+      sess.mode = 'edit_strefa';
+      sess.shiftId = shiftId;
+      const message = await bot.sendMessage(chatId, 'Wybierz nową strefę:', zonesKeyboard);
+      sess.messagesToDelete.push(message.message_id);
+      logger.info(`Użytkownik ${chatId} rozpoczął edytowanie strefy dla zmiany ${shiftId}, tryb: ${sess.mode}`);
+    } else if (data.startsWith('edit_date_')) {
+      const shiftId = data.split('_')[2];
+      sess.mode = 'edit_date';
+      sess.shiftId = shiftId;
+      const message = await bot.sendMessage(chatId, 'Wybierz nową datę (np. dzisiaj, jutro, 05.05.2025):', returnKeyboard);
+      sess.messagesToDelete.push(message.message_id);
+      logger.info(`Użytkownik ${chatId} rozpoczął edytowanie daty dla zmiany ${shiftId}, tryb: ${sess.mode}`);
+    } else if (data.startsWith('edit_time_')) {
+      const shiftId = data.split('_')[2];
+      sess.mode = 'edit_time';
+      sess.shiftId = shiftId;
+      const message = await bot.sendMessage(chatId, 'Wpisz nowy czas (np. 11:00-19:00):', returnKeyboard);
+      sess.messagesToDelete.push(message.message_id);
+      logger.info(`Użytkownik ${chatId} rozpoczął edytowanie czasu dla zmiany ${shiftId}, tryb: ${sess.mode}`);
+    } else if (data.startsWith('filter_')) {
+      const [_, filterType, filterValue, strefa] = data.split('_');
+      try {
+        let rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
+        const now = moment();
+
+        if (filterType === 'date') {
+          const today = moment().startOf('day');
+          const tomorrow = moment().add(1, 'day').startOf('day');
+          rows = rows.filter(row => {
+            const shiftDate = moment(row.date, 'DD.MM.YYYY');
+            if (filterValue === 'today') return shiftDate.isSame(today, 'day');
+            if (filterValue === 'tomorrow') return shiftDate.isSame(tomorrow, 'day');
+            return true;
+          });
+        }
+
+        if (filterType === 'time') {
+          rows = rows.filter(row => {
+            const startHour = parseInt(row.time.split('-')[0].split(':')[0]);
+            if (filterValue === 'morning') return startHour >= 6 && startHour < 12;
+            if (filterValue === 'afternoon') return startHour >= 12 && startHour < 18;
+            if (filterValue === 'evening') return startHour >= 18 && startHour < 24;
+            return true;
+          });
+        }
+
+        if (filterType === 'duration') {
+          rows = rows.filter(row => {
+            const [start, end] = row.time.split('-');
+            const startTime = moment(start, 'HH:mm');
+            const endTime = moment(end, 'HH:mm');
+            const duration = endTime.diff(startTime, 'hours', true);
+            if (filterValue === 'short') return duration < 6;
+            return true;
+          });
+        }
+
+        sess.viewedShifts = rows.map(row => row.id);
+
+        if (!rows.length) {
+          const msg2 = await bot.sendMessage(chatId, 'Brak dostępnych zmian po zastosowaniu filtra.', mainKeyboard);
+          sess.messagesToDelete.push(msg2.message_id);
+          logger.info(`Brak zmian po filtrze ${filterType}_${filterValue} w strefie ${strefa} dla ${chatId}`);
+          sess.viewedShifts = [];
+        } else {
+          for (const row of rows) {
+            const shiftStart = moment(`${row.date} ${row.time.split('-')[0]}`, 'DD.MM.YYYY HH:mm');
+            if (shiftStart.isAfter(now)) {
+              const displayUsername = row.username || 'Użytkownik';
+              const msg3 = await bot.sendMessage(
+                chatId,
+                `ID: ${row.id}\nData: ${row.date}, Godzina: ${row.time}\nOddaje: @${displayUsername}\nChcesz przejąć tę zmianę?`,
+                { reply_markup: { inline_keyboard: [[{ text: 'Przejmuję zmianę', callback_data: `take_${row.id}_${row.chat_id}` }]] } }
+              );
+              sess.messagesToDelete.push(msg3.message_id);
+              logger.info(`Wysłano zmianę ID ${row.id} użytkownikowi ${chatId}`);
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(`Błąd podczas filtrowania zmian w strefie ${strefa}: ${err.message}`);
+        await bot.sendMessage(chatId, 'Wystąpił błąd podczas filtrowania zmian.', mainKeyboard);
+        clearSession(chatId);
+      }
+    } else if (data.startsWith('contact_')) {
+      const [_, otherChatId, otherUsername] = data.split('_');
+      sess.mode = 'contact';
+      sess.otherChatId = parseInt(otherChatId);
+      sess.otherUsername = otherUsername;
+      await bot.sendMessage(chatId, `Rozpoczęto czat z @${otherUsername}. Napisz wiadomość (czat wygasa po 10 minutach):`, {
+        reply_markup: {
+          keyboard: [['Zakończ czat']],
+          resize_keyboard: true,
+        },
+      });
+      sess.chatTimeout = setTimeout(async () => {
+        await bot.sendMessage(chatId, 'Czat wygasł po 10 minutach.', mainKeyboard);
+        await bot.sendMessage(otherChatId, 'Czat wygasł po 10 minutach.', mainKeyboard);
+        clearSession(chatId);
+      }, 10 * 60 * 1000);
+    }
+
+    await bot.answerCallbackQuery(query.id);
+  } catch (err) {
+    logger.error(`Błąd podczas przetwarzania callback od ${chatId}: ${err.message}`);
+    await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie.', mainKeyboard);
+    clearSession(chatId);
+  }
+});
+
+// Uruchom czyszczenie wygasłych zmian co minutę
+setInterval(cleanExpiredShifts, 60 * 1000);
+logger.info('Uruchomiono cykliczne czyszczenie wygasłych zmian co minutę');
+
+// Uruchom serwer Express
+app.get('/', (req, res) => {
+  res.send('Bot działa!');
+});
+
+app.listen(PORT, () => {
+  logger.info(`Serwer działa na porcie ${PORT}`);
+});

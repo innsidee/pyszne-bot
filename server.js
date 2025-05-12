@@ -1052,7 +1052,7 @@ bot.on('callback_query', async (query) => {
   });
 }
       logger.info(`Użytkownik ${chatId} wybrał zmianę ${shiftId} do edycji, tryb: ${sess.mode}`);
-    try {
+try {
   if (data.startsWith('edit_strefa_')) {
     const shiftId = data.split('_')[2];
     sess.mode = 'edit_strefa';
@@ -1075,7 +1075,12 @@ bot.on('callback_query', async (query) => {
     sess.messagesToDelete.push(message.message_id);
     logger.info(`Użytkownik ${chatId} rozpoczął edytowanie czasu dla zmiany ${shiftId}, tryb: ${sess.mode}`);
   }
-    } else if (data.startsWith('filter_')) {
+} catch (error) {
+  logger.error(`Błąd podczas edytowania: ${error.message}`);
+  await bot.sendMessage(chatId, 'Wystąpił błąd podczas edycji.', mainKeyboard);
+}
+
+if (data.startsWith('filter_')) {
   const [_, filterType, filterValue, strefa] = data.split('_');
   try {
     let rows = await db.all(`SELECT id, username, chat_id, date, time FROM shifts WHERE strefa = $1 ORDER BY created_at DESC`, [strefa]);
@@ -1132,38 +1137,37 @@ bot.on('callback_query', async (query) => {
         }
       }
     }
-
   } catch (err) {
     logger.error(`Błąd podczas filtrowania zmian w strefie ${strefa}: ${err.message}`);
     await bot.sendMessage(chatId, 'Wystąpił błąd podczas filtrowania zmian.', mainKeyboard);
     clearSession(chatId);
   }
 }
-    } else if (data.startsWith('contact_')) {
-      const [_, otherChatId, otherUsername] = data.split('_');
-      sess.mode = 'contact';
-      sess.otherChatId = parseInt(otherChatId);
-      sess.otherUsername = otherUsername;
-      await bot.sendMessage(chatId, `Rozpoczęto czat z @${otherUsername}. Napisz wiadomość (czat wygasa po 10 minutach):`, {
-        reply_markup: {
-          keyboard: [['Zakończ czat']],
-          resize_keyboard: true,
-        },
-      });
-      sess.chatTimeout = setTimeout(async () => {
-        await bot.sendMessage(chatId, 'Czat wygasł po 10 minutach.', mainKeyboard);
-        await bot.sendMessage(otherChatId, 'Czat wygasł po 10 minutach.', mainKeyboard);
-        clearSession(chatId);
-      }, 10 * 60 * 1000);
-    }
 
-    await bot.answerCallbackQuery(query.id);
-  } catch (err) {
-    logger.error(`Błąd podczas przetwarzania callback od ${chatId}: ${err.message}`);
-    await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie.', mainKeyboard);
+if (data.startsWith('contact_')) {
+  const [_, otherChatId, otherUsername] = data.split('_');
+  sess.mode = 'contact';
+  sess.otherChatId = parseInt(otherChatId);
+  sess.otherUsername = otherUsername;
+  await bot.sendMessage(chatId, `Rozpoczęto czat z @${otherUsername}. Napisz wiadomość (czat wygasa po 10 minutach):`, {
+    reply_markup: {
+      keyboard: [['Zakończ czat']],
+      resize_keyboard: true,
+    },
+  });
+  sess.chatTimeout = setTimeout(async () => {
+    await bot.sendMessage(chatId, 'Czat wygasł po 10 minutach.', mainKeyboard);
+    await bot.sendMessage(otherChatId, 'Czat wygasł po 10 minutach.', mainKeyboard);
     clearSession(chatId);
-  }
-});
+  }, 10 * 60 * 1000);
+}
+
+await bot.answerCallbackQuery(query.id);
+} catch (err) {
+  logger.error(`Błąd podczas przetwarzania callback od ${chatId}: ${err.message}`);
+  await bot.sendMessage(chatId, 'Wystąpił błąd. Spróbuj ponownie.', mainKeyboard);
+  clearSession(chatId);
+}
 
 // Uruchom czyszczenie wygasłych zmian co minutę
 setInterval(cleanExpiredShifts, 60 * 1000);

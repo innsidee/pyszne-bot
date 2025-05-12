@@ -1132,6 +1132,7 @@ bot.on('callback_query', async (query) => {
         }
       }
     }
+
   } catch (err) {
     logger.error(`Błąd podczas filtrowania zmian w strefie ${strefa}: ${err.message}`);
     await bot.sendMessage(chatId, 'Wystąpił błąd podczas filtrowania zmian.', mainKeyboard);
